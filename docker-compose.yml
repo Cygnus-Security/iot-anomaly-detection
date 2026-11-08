@@ -1,0 +1,141 @@
+x-app: &app
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: iot-anomaly-detection:mvp
+  restart: unless-stopped
+  init: true
+  environment: &common-environment
+    MQTT_HOST: ${MQTT_HOST:-mosquitto}
+    MQTT_PORT: ${MQTT_PORT:-1883}
+    MQTT_KEEPALIVE: ${MQTT_KEEPALIVE:-60}
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  networks:
+    - iot_lab
+
+services:
+  mosquitto:
+    build:
+      context: docker/mosquitto
+    image: iot-anomaly-mosquitto:2.1.2
+    restart: unless-stopped
+    init: true
+    environment:
+      DEVICE_COUNT: ${DEVICE_COUNT:-12}
+      DEVICE_PASSWORD: ${DEVICE_PASSWORD:?Set DEVICE_PASSWORD in .env}
+      COLLECTOR_PASSWORD: ${COLLECTOR_PASSWORD:?Set COLLECTOR_PASSWORD in .env}
+      OPERATOR_PASSWORD: ${OPERATOR_PASSWORD:?Set OPERATOR_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${MQTT_HOST_PORT:-1883}:1883"
+    volumes:
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_logs:/mosquitto/log
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h 127.0.0.1 -p 1883 -u collector -P \"$$COLLECTOR_PASSWORD\" -t '$$SYS/broker/version' -C 1 -W 3 >/dev/null"]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+      start_period: 5s
+    networks:
+      - iot_lab
+
+  collector:
+    <<: *app
+    command: ["python", "-m", "src.collector.service"]
+    environment:
+      <<: *common-environment
+      MQTT_USERNAME: collector
+      MQTT_PASSWORD: ${COLLECTOR_PASSWORD:?Set COLLECTOR_PASSWORD in .env}
+      SQLITE_PATH: ${SQLITE_PATH:-/app/data/runtime/iot_anomaly.db}
+      COLLECTOR_QUEUE_SIZE: ${COLLECTOR_QUEUE_SIZE:-10000}
+    volumes:
+      - ./data/runtime:/app/data/runtime
+      - ./data/exports:/app/data/exports
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "src.collector.healthcheck", "--database", "/app/data/runtime/iot_anomaly.db"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  simulator:
+    <<: *app
+    command: ["python", "-m", "src.simulator.main"]
+    environment:
+      <<: *common-environment
+      DEVICE_PASSWORD: ${DEVICE_PASSWORD:?Set DEVICE_PASSWORD in .env}
+      DEVICE_COUNT: ${DEVICE_COUNT:-12}
+      DEVICE_BASE_INTERVAL_SECONDS: ${DEVICE_BASE_INTERVAL_SECONDS:-2.0}
+      DEVICE_INTERVAL_JITTER_SECONDS: ${DEVICE_INTERVAL_JITTER_SECONDS:-0.2}
+      DEVICE_HEARTBEAT_SECONDS: ${DEVICE_HEARTBEAT_SECONDS:-30.0}
+      SIMULATION_SEED: ${SIMULATION_SEED:-20261108}
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      collector:
+        condition: service_healthy
+
+  dashboard:
+    <<: *app
+    command:
+      - streamlit
+      - run
+      - src/dashboard/app.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      - --server.headless=true
+    environment:
+      <<: *common-environment
+      SQLITE_PATH: ${SQLITE_PATH:-/app/data/runtime/iot_anomaly.db}
+    ports:
+      - "127.0.0.1:${DASHBOARD_PORT:-8501}:8501"
+    volumes:
+      - ./data/runtime:/app/data/runtime:ro
+    depends_on:
+      collector:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "src.dashboard.healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  scenario:
+    <<: *app
+    profiles: ["tools"]
+    restart: "no"
+    entrypoint: ["python", "-m", "src.simulator.controller"]
+    command: []
+    environment:
+      <<: *common-environment
+      MQTT_USERNAME: operator
+      MQTT_PASSWORD: ${OPERATOR_PASSWORD:?Set OPERATOR_PASSWORD in .env}
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+
+  tests:
+    <<: *app
+    profiles: ["test"]
+    restart: "no"
+    command: ["pytest"]
+    environment:
+      <<: *common-environment
+      DEVICE_PASSWORD: ${DEVICE_PASSWORD:?Set DEVICE_PASSWORD in .env}
+      COLLECTOR_PASSWORD: ${COLLECTOR_PASSWORD:?Set COLLECTOR_PASSWORD in .env}
+      RUN_MQTT_INTEGRATION: "1"
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+
+networks:
+  iot_lab:
+    driver: bridge
+
+volumes:
+  mosquitto_data:
+  mosquitto_logs:
