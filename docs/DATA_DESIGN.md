@@ -250,10 +250,20 @@ end row is an explicitly open run, not a completed experiment.
 
 ### 7.5. Storage rules
 
-- SQLite uses WAL and a busy timeout. The collector owns raw-table writes;
-  analytics owns derived-table writes; the dashboard and export pipeline open
-  separate read-only connections.
-- SQLite and later model artifacts live on persistent Docker storage.
+- SQLite uses WAL and a busy timeout. The collector owns raw-table writes and
+  analytics owns derived-table writes. Interactive readers may use the local
+  `data/runtime/` database, but Chapter IV live readers stay inside the Linux
+  container environment.
+- A live campaign database resides in the Docker-managed `experiment_data`
+  named volume. After Analytics completes and all writers stop, the runner
+  checkpoints it, requires `PRAGMA integrity_check` to return `ok`, and copies
+  the database plus collector-state sidecar into the per-run `results/`
+  directory. Host-side training, export, evaluation, and dashboard inspection
+  use only this verified snapshot.
+- A failed, interrupted, or corrupt attempt is retained as archive-only
+  evidence and is excluded from every model and metric input.
+- Verified SQLite snapshots and later model artifacts live under the ignored
+  `results/` tree.
 - MQTT passwords and other secrets are never written to raw payload columns or
   CSV exports.
 - A reader-visible or behavior-changing physical schema update requires a
@@ -343,7 +353,10 @@ data/exports/
 
 It exports physical table columns in stable row order and does not silently
 clean, impute, relabel, or synthesize values. `schema_metadata` is not exported.
-The SQLite database under `data/runtime/` remains the source of truth.
+For the interactive lab, the SQLite database under `data/runtime/` remains the
+source of truth. For Chapter IV, each integrity-verified per-run database under
+`results/runs/{run_id}/run.db` is the immutable source of truth; the live named
+volume is transient and is never read by host-side training or evaluation.
 
 ### 11.2. Chapter IV campaign products
 

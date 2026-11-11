@@ -301,6 +301,32 @@ class AnalyticsStore:
                     phase_id = excluded.phase_id,
                     is_target_device = excluded.is_target_device,
                     updated_at_utc = excluded.updated_at_utc
+                WHERE feature_windows.observed_message_count
+                          IS NOT excluded.observed_message_count
+                   OR feature_windows.feature_status
+                          IS NOT excluded.feature_status
+                   OR feature_windows.exclusion_reason
+                          IS NOT excluded.exclusion_reason
+                   OR feature_windows.message_count
+                          IS NOT excluded.message_count
+                   OR feature_windows.message_rate_hz
+                          IS NOT excluded.message_rate_hz
+                   OR feature_windows.payload_mean_bytes
+                          IS NOT excluded.payload_mean_bytes
+                   OR feature_windows.payload_std_bytes
+                          IS NOT excluded.payload_std_bytes
+                   OR feature_windows.interarrival_mean_ms
+                          IS NOT excluded.interarrival_mean_ms
+                   OR feature_windows.interarrival_std_ms
+                          IS NOT excluded.interarrival_std_ms
+                   OR feature_windows.peak_messages_per_second
+                          IS NOT excluded.peak_messages_per_second
+                   OR feature_windows.ground_truth_label
+                          IS NOT excluded.ground_truth_label
+                   OR feature_windows.phase_id
+                          IS NOT excluded.phase_id
+                   OR feature_windows.is_target_device
+                          IS NOT excluded.is_target_device
                 """,
                 records,
             )

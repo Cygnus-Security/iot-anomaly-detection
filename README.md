@@ -26,11 +26,14 @@ corresponding live run completes under `results/`.
 ## Runtime data flow
 
 ```text
-Virtual devices --> Mosquitto --> Collector --> per-run SQLite
+Virtual devices --> Mosquitto --> Collector --> live per-run SQLite named volume
        ^                 |                         |
        |                 +--> broker logs         +--> scheduled feature windows
        +-- Operator CLI                               --> Isolation Forest decisions
                                                         --> alerts
+                                                             |
+                                                             v
+                                                    verified results snapshot
                                                              |
                                                              v
                                                     read-only dashboard
@@ -141,10 +144,15 @@ artifact does not yet exist:
   --trainer-command ".venv/bin/python scripts/train_model.py --results-dir results"
 ```
 
-The runner creates a clean database per run, records actual UTC boundaries,
-samples Docker resource use, and refuses to overwrite completed evidence. To
-archive and retry a failed or interrupted attempt, repeat the command with
-`--retry-failed`.
+The runner creates each live database in a Docker named volume shared only by
+the Linux Collector and Analytics containers. The host does not open that WAL
+database while either writer is active. After Analytics completes, the runner
+stops the writers, checkpoints and integrity-checks the database, and only then
+copies the verified database and collector-state sidecar into the run's
+`results/` directory. A failed integrity gate cannot enter training or
+evaluation. The runner also records actual UTC boundaries, samples Docker
+resource use, and refuses to overwrite completed evidence. To archive and retry
+a failed or interrupted attempt, repeat the command with `--retry-failed`.
 
 After all runs complete, export every run and generate evaluation tables and
 figures:

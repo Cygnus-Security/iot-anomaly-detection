@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import shutil
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Mapping, Sequence
 
 import pytest
 
+from src.experiments import runner as runner_module
 from src.experiments.artifacts import prepare_run_directory, update_run_manifest
 from src.experiments.planning import RunPlanEntry, load_run_plan
 from src.experiments.runner import (
@@ -16,6 +18,8 @@ from src.experiments.runner import (
     CampaignRunner,
     ComposeClient,
     _dry_run_summary,
+    _validate_collector_state,
+    _write_integrity_report,
     _write_actual_phases,
     effective_timing,
     prepare_run_attempt,
@@ -110,20 +114,51 @@ def test_retry_archives_failed_evidence_and_completed_runs_are_immutable(
     (run_directory / "orchestration_events.csv").write_text(
         "event\nrun_start\n", encoding="utf-8"
     )
+    for name in (
+        "run.db-journal",
+        "analytics-container.log",
+        "integrity-report.json",
+        "timing_samples.csv",
+    ):
+        (run_directory / name).write_text(f"{name}\n", encoding="utf-8")
+    original_session = json.loads(manifest_path.read_text(encoding="utf-8"))[
+        "collection_session_id"
+    ]
 
     with pytest.raises(CampaignRunError, match="--retry-failed"):
         prepare_run_attempt(run_directory, entry, retry_failed=False)
 
-    manifest = prepare_run_attempt(run_directory, entry, retry_failed=True)
+    manifest = prepare_run_attempt(
+        run_directory,
+        entry,
+        retry_failed=True,
+        code_version="def456",
+        worktree_dirty=False,
+    )
     assert manifest is not None
     updated = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert updated["status"] == "planned"
     assert updated["attempt_number"] == 2
     assert updated["attempt_history"][0]["failure_reason"] == "intentional"
+    assert updated["attempt_history"][0]["code_version"] == "abc123"
+    assert updated["attempt_history"][0]["collection_session_id"] == original_session
+    assert updated["attempt_history"][0]["archive_directory"].startswith(
+        "attempts/attempt-01-"
+    )
+    assert updated["collection_session_id"] != original_session
+    assert updated["code_version"] == "def456"
+    assert updated["worktree_dirty"] is False
     archived = list((run_directory / "attempts").glob("attempt-01-*"))
     assert len(archived) == 1
     assert (archived[0] / "run.db").read_bytes() == b"prior-attempt"
     assert (archived[0] / "orchestration_events.csv").is_file()
+    for name in (
+        "run.db-journal",
+        "analytics-container.log",
+        "integrity-report.json",
+        "timing_samples.csv",
+    ):
+        assert (archived[0] / name).is_file()
     assert not (run_directory / "run.db").exists()
     with (run_directory / "scenario_phases.csv").open(encoding="utf-8", newline="") as handle:
         assert {row["status"] for row in csv.DictReader(handle)} == {"planned"}
@@ -131,6 +166,53 @@ def test_retry_archives_failed_evidence_and_completed_runs_are_immutable(
     update_run_manifest(manifest_path, status="running")
     update_run_manifest(manifest_path, status="completed")
     assert prepare_run_attempt(run_directory, entry, retry_failed=True) is None
+
+
+def test_running_attempt_requires_explicit_retry_flag(tmp_path: Path) -> None:
+    entry = _entry("train-normal-01")
+    run_directory = prepare_run_directory(tmp_path, entry, code_version="abc123")
+    update_run_manifest(run_directory / "run_manifest.json", status="running")
+
+    with pytest.raises(CampaignRunError, match="--retry-failed"):
+        prepare_run_attempt(run_directory, entry, retry_failed=False)
+
+
+def test_integrity_gate_rejects_a_corrupt_snapshot(tmp_path: Path) -> None:
+    database = tmp_path / "run.db"
+    database.write_bytes(b"not-a-sqlite-database")
+    report = tmp_path / "integrity-report.json"
+
+    with pytest.raises(CampaignRunError, match="integrity"):
+        _write_integrity_report(
+            database,
+            report,
+            container_check={"status": "ok", "integrity_check": ["ok"]},
+        )
+
+    assert json.loads(report.read_text(encoding="utf-8"))["status"] == "failed"
+
+
+def test_collector_state_gate_requires_drained_lossless_shutdown(tmp_path: Path) -> None:
+    path = tmp_path / "run.db.collector-state.json"
+    clean = {
+        "schema_version": "1.0",
+        "accepting_messages": False,
+        "queue_depth": 0,
+        "oldest_pending_received_at_unix": None,
+        "last_enqueued_at_unix": 100.0,
+        "last_persisted_received_at_unix": 100.0,
+        "dropped_message_count": 0,
+        "loss_events": [],
+    }
+    path.write_text(json.dumps(clean) + "\n", encoding="utf-8")
+    assert _validate_collector_state(path)["queue_depth"] == 0
+
+    path.write_text(
+        json.dumps({**clean, "dropped_message_count": 1}) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(CampaignRunError, match="message loss"):
+        _validate_collector_state(path)
 
 
 def test_compose_client_uses_fixed_project_file_and_environment(tmp_path: Path) -> None:
@@ -197,9 +279,15 @@ def test_runner_completes_a_normal_smoke_attempt_with_injected_runtime(
     run_directory = prepare_run_directory(results_root, entry, code_version="abc123")
     database_path = run_directory / "run.db"
     ready_path = run_directory / "analytics.ready.json"
+    runtime_directory = tmp_path / "runtime-volume"
+    runtime_directory.mkdir()
+    runtime_database = runtime_directory / "run.db"
+    runtime_state = runtime_directory / "run.db.collector-state.json"
+    clock = FakeClock()
+    calls: list[list[str]] = []
 
     def initialize_raw_database() -> None:
-        with sqlite3.connect(database_path) as connection:
+        with sqlite3.connect(runtime_database) as connection:
             connection.executescript(
                 """
                 CREATE TABLE mqtt_observations (
@@ -215,6 +303,22 @@ def test_runner_completes_a_normal_smoke_attempt_with_injected_runtime(
                 "INSERT INTO mqtt_observations VALUES (?, 'telemetry', 1, 0, 0)",
                 [(f"iot-{index:03d}",) for index in range(1, 13)],
             )
+        runtime_state.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "accepting_messages": False,
+                    "queue_depth": 0,
+                    "oldest_pending_received_at_unix": None,
+                    "last_enqueued_at_unix": 1_700_000_000.0,
+                    "last_persisted_received_at_unix": 1_700_000_000.0,
+                    "dropped_message_count": 0,
+                    "loss_events": [],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
     def fake_runner(
         arguments: Sequence[str],
@@ -224,13 +328,39 @@ def test_runner_completes_a_normal_smoke_attempt_with_injected_runtime(
         timeout: float | None,
         check: bool,
     ) -> subprocess.CompletedProcess[str]:
-        del cwd, env, timeout, check
+        del cwd, timeout, check
         argv = list(arguments)
-        if "up" in argv and argv[-1] == "simulator" and not database_path.exists():
+        calls.append(argv)
+        if "up" in argv and argv[-1] == "simulator" and not runtime_database.exists():
             initialize_raw_database()
         if "up" in argv and argv[-1] == "analytics":
             ready_path.write_text('{"ready":true}\n', encoding="utf-8")
+        if argv[:2] == ["docker", "inspect"]:
+            state = (
+                {"Status": "running", "ExitCode": 0}
+                if clock.monotonic() < 1.0
+                else {"Status": "exited", "ExitCode": 0}
+            )
+            return subprocess.CompletedProcess(arguments, 0, json.dumps(state) + "\n", "")
+        if argv[:2] == ["docker", "cp"]:
+            name = argv[2].rsplit("/", 1)[-1]
+            source = runtime_directory / name
+            if not source.exists():
+                return subprocess.CompletedProcess(arguments, 1, "", "not found")
+            shutil.copy2(source, Path(argv[3]))
+            return subprocess.CompletedProcess(arguments, 0, "", "")
         stdout = ""
+        if "ps" in argv and argv[-1] == "analytics":
+            stdout = "analytics-id\n"
+        elif "ps" in argv and argv[-1] == "collector":
+            stdout = "collector-id\n"
+        elif "exec" in argv and argv[-4:-1] == ["collector", "python", "-c"]:
+            assert env["SQLITE_PATH"] == "/app/experiment-data/run.db"
+            stdout = "12\n"
+        elif "run" in argv and argv[-4:-1] == ["collector", "python", "-c"]:
+            stdout = json.dumps(
+                {"checkpoint": [[0, 0, 0]], "integrity_check": ["ok"]}
+            ) + "\n"
         if "logs" in argv:
             stdout = "collector | clean shutdown\n"
         return subprocess.CompletedProcess(arguments, 0, stdout, "")
@@ -242,7 +372,7 @@ def test_runner_completes_a_normal_smoke_attempt_with_injected_runtime(
         smoke_duration_seconds=1.0,
         settle_grace_seconds=0.0,
         command_runner=fake_runner,
-        clock=FakeClock(),
+        clock=clock,
     )
     assert runner.run_entry(entry) == "completed"
     manifest = json.loads((run_directory / "run_manifest.json").read_text())
@@ -252,7 +382,79 @@ def test_runner_completes_a_normal_smoke_attempt_with_injected_runtime(
     assert "orchestration_events.csv" in manifest["output_files"]
     assert (run_directory / "resource_samples.csv").is_file()
     assert (run_directory / "orchestration_events.csv").is_file()
+    assert (run_directory / "integrity-report.json").is_file()
+    assert json.loads((run_directory / "integrity-report.json").read_text())[
+        "status"
+    ] == "ok"
+    stop_index = next(index for index, call in enumerate(calls) if "stop" in call)
+    copy_index = next(index for index, call in enumerate(calls) if call[:2] == ["docker", "cp"])
+    assert stop_index < copy_index
+    assert any(
+        "logs" in call
+        and "--profile" in call
+        and "experiment" in call
+        and "tools" in call
+        for call in calls
+    )
+    assert any("down" in call and "--volumes" in call for call in calls)
     assert not (run_directory / "timing_samples.csv").exists()
+
+
+def test_keyboard_interrupt_marks_attempt_aborted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entry = _entry("train-normal-01")
+    results_root = tmp_path / "results"
+    run_directory = prepare_run_directory(results_root, entry, code_version="abc123")
+
+    class InterruptClock(FakeClock):
+        def sleep(self, seconds: float) -> None:
+            del seconds
+            raise KeyboardInterrupt
+
+    def fake_runner(
+        arguments: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        timeout: float | None,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, env, timeout, check
+        return subprocess.CompletedProcess(arguments, 0, "", "")
+
+    monkeypatch.setattr(runner_module, "_remove_runtime_project", lambda compose: None)
+    monkeypatch.setattr(runner_module, "_stop_runtime_services", lambda compose: None)
+    monkeypatch.setattr(
+        runner_module, "_capture_analytics_log", lambda compose, destination: None
+    )
+    monkeypatch.setattr(runner_module, "_wait_for_analytics_ready", lambda *a, **k: None)
+    monkeypatch.setattr(runner_module, "_wait_for_devices", lambda *a, **k: None)
+    monkeypatch.setattr(runner_module, "_assert_analytics_running", lambda compose: None)
+    monkeypatch.setattr(runner_module, "_resource_sample", lambda *a, **k: [])
+    monkeypatch.setattr(
+        runner_module,
+        "_validate_runtime_volume",
+        lambda compose: {"status": "ok", "integrity_check": ["ok"]},
+    )
+    monkeypatch.setattr(
+        runner_module, "_copy_runtime_artifacts", lambda *a, **k: False
+    )
+
+    runner = CampaignRunner(
+        repository_root=tmp_path,
+        results_root=results_root,
+        compose_file=tmp_path / "docker-compose.yml",
+        smoke_duration_seconds=1.0,
+        command_runner=fake_runner,
+        clock=InterruptClock(),
+    )
+    with pytest.raises(KeyboardInterrupt):
+        runner.run_entry(entry)
+
+    manifest = json.loads((run_directory / "run_manifest.json").read_text())
+    assert manifest["status"] == "aborted"
+    assert manifest["failure_reason"].startswith("KeyboardInterrupt")
 
 
 def test_container_paths_follow_the_compose_results_mount(tmp_path: Path) -> None:

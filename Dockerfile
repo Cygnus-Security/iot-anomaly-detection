@@ -15,6 +15,7 @@ RUN mkdir -p src && pip install --no-cache-dir ".[dev]"
 ENV PYTHONPATH=/app
 
 COPY .streamlit ./.streamlit
+COPY experiments ./experiments
 COPY src ./src
 COPY tests ./tests
 

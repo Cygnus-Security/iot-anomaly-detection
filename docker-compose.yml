@@ -53,6 +53,7 @@ services:
       - ./data/runtime:/app/data/runtime
       - ./data/exports:/app/data/exports
       - ./results:/app/results
+      - experiment_data:/app/experiment-data
     depends_on:
       mosquitto:
         condition: service_healthy
@@ -85,7 +86,7 @@ services:
     <<: *app
     profiles: ["experiment"]
     restart: "no"
-    command: ["python", "-m", "src.analytics.service"]
+    command: ["python", "-m", "src.analytics"]
     environment:
       <<: *common-environment
       SQLITE_PATH: ${SQLITE_PATH:-/app/data/runtime/iot_anomaly.db}
@@ -102,6 +103,7 @@ services:
     volumes:
       - ./data/runtime:/app/data/runtime
       - ./results:/app/results
+      - experiment_data:/app/experiment-data
     depends_on:
       collector:
         condition: service_healthy
@@ -174,3 +176,4 @@ networks:
 volumes:
   mosquitto_data:
   mosquitto_logs:
+  experiment_data:

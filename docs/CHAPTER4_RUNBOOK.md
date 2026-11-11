@@ -18,8 +18,11 @@ output, and measured evaluation results:
 - metrics and figures are generated from completed held-out databases, never
   entered manually or inferred from run names.
 
-All campaign evidence belongs under one ignored directory, `results/`. Do not
-copy an SQLite file while it is actively being written.
+All campaign evidence belongs under one ignored directory, `results/`. The live
+campaign database remains in the Docker-managed `experiment_data` volume at
+`/app/experiment-data/run.db`; the host must never open or copy it while a
+writer is active. A per-run `results/` database is created only after writer
+shutdown, checkpoint, and a successful integrity gate.
 
 ## 2. Frozen campaign
 
@@ -109,20 +112,26 @@ logs, and never lets a claimed live pass override a failed automated check.
 
 For each entry, the runner:
 
-1. uses a new `collection_session_id` and clean per-run SQLite database;
+1. uses a new `collection_session_id` and clean per-run SQLite database in the
+   Docker-managed `experiment_data` volume;
 2. starts the authenticated broker and collector;
 3. anchors the real UTC run interval before the simulator's deterministic
    0-5-second initial spread;
 4. starts analytics with the same run anchor and waits for readiness;
-5. verifies valid telemetry from all 12 devices;
+5. verifies valid telemetry from all 12 devices from inside the Linux container
+   environment and monitors Analytics liveness throughout the run;
 6. applies K2-K4 at the planned monotonic deadline and later reads the actual
    start/end events from SQLite;
 7. samples Docker resource use at one-second intervals;
-8. allows final window processing, checks scheduled-window completeness, writes
-   manifests and logs, and stops the run services.
+8. waits for Analytics to complete, stops all SQLite writers, performs a
+   container-side WAL checkpoint and `integrity_check`, and rejects any result
+   other than `ok`;
+9. copies the verified database and collector-state sidecar into the run's
+   `results/` directory, checks scheduled-window completeness, and writes the
+   manifests and complete profile-aware logs.
 
-Completed run evidence is immutable. If an attempt is failed or interrupted,
-the runner does not silently reuse its database. Retry explicitly:
+Completed run evidence is immutable. If an attempt is running, failed, or
+interrupted, the runner does not silently reuse its database. Retry explicitly:
 
 ```bash
 .venv/bin/python scripts/run_campaign.py \
@@ -132,7 +141,11 @@ the runner does not silently reuse its database. Retry explicitly:
 ```
 
 The previous attempt is moved under the run's `attempts/` directory before the
-new attempt starts.
+new attempt starts. Its manifest, source version, collection session, runtime
+logs, database/WAL files, and integrity report remain linked from attempt
+history. Every retry receives a new collection session. Corrupt or incomplete
+attempts are archive-only evidence and are never eligible for training,
+inference, or evaluation.
 
 ## 5. Model freeze and trust boundary
 
@@ -219,6 +232,7 @@ results/
     timing_samples.csv
     orchestration_events.csv
     runtime.log
+    attempts/          # immutable evidence from failed or interrupted attempts
   evaluation_windows.csv
   metrics_by_run.csv
   metrics_by_scenario.csv

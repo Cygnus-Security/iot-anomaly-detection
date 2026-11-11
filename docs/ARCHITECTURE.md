@@ -345,10 +345,15 @@ label active indefinitely.
 | `scenario` | Authenticated K1-K4 command CLI | On demand through the `tools` profile |
 | `tests` | Unit and real-broker integration tests | On demand through the `test` profile |
 
-SQLite is a bind-mounted file shared by the collector and analytics writers and
-the read-only dashboard. The campaign runner gives every run a separate file
-and lifecycle, so the two writers operate on distinct raw/derived ownership.
-There is no separate database container.
+The interactive lab keeps its database under the bind-mounted `data/runtime/`
+directory for local inspection. Chapter IV runs use a different topology: the
+live WAL database is stored in the Docker-managed `experiment_data` named
+volume at `/app/experiment-data/run.db`, shared only by Collector and Analytics
+inside the Linux VM. The host never opens the live campaign database. After
+Analytics exits successfully, the runner stops every SQLite writer, performs a
+container-side checkpoint and integrity check, and copies the verified database
+and state sidecar into the per-run `results/` directory. There is no separate
+database server container.
 
 ### 7.2. Training and evaluation deployment
 
@@ -371,8 +376,13 @@ Redis, Kafka, Kubernetes, and a distributed database are not required.
   deliberately slow SQLite worker cannot cause premature feature/prediction
   persistence for a message already received before the boundary.
 - SQLite uses WAL and a busy timeout; collector raw writes and analytics derived
-  writes use separate serialized connections, while readers open short-lived
-  read-only connections.
+  writes use separate serialized connections. During a campaign, live readers
+  also remain inside the Linux container environment. Host-side training,
+  export, evaluation, and dashboard inspection begin only after writer shutdown
+  and a successful checkpoint/integrity gate.
+- The runner monitors Analytics liveness, captures experiment-profile logs, and
+  prevents a corrupt, incomplete, or interrupted database from entering model
+  training or evaluation.
 - Invalid JSON, invalid identity, oversized payload, unsupported schema, and
   unknown topics are logged and excluded from model input.
 - Empty or undersized windows are not zero-filled to force inference.

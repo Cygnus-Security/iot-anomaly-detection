@@ -283,7 +283,9 @@ def test_reprocessing_is_idempotent_and_does_not_duplicate_alerts(tmp_path: Path
     service = AnalyticsService(config(path, start), artifact=artifact())
     try:
         first = service.process_until(start + 20.0)
+        changes_after_first_pass = service.store.connection.total_changes
         second = service.process_until(start + 20.0)
+        changes_after_second_pass = service.store.connection.total_changes
     finally:
         service.close()
 
@@ -293,6 +295,7 @@ def test_reprocessing_is_idempotent_and_does_not_duplicate_alerts(tmp_path: Path
     assert second.window_predictions == 2
     assert second.inference_calls == 1
     assert second.anomaly_alerts == 1
+    assert changes_after_second_pass == changes_after_first_pass
 
 
 def test_scenario_truth_uses_actual_start_and_end_events(tmp_path: Path) -> None:

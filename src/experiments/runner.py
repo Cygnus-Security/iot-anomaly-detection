@@ -17,6 +17,7 @@ import shutil
 import sqlite3
 import subprocess
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,8 +32,12 @@ from src.experiments.artifacts import (
     write_json_atomic,
 )
 from src.experiments.planning import RunPlanEntry, load_run_plan, phase_schedule
+from src.collector.runtime_state import load_runtime_state
+from src.ml import load_artifact
 
-MODEL_FILES = ("model.joblib", "model_metadata.json")
+MODEL_FILES = ("model.joblib", "model_metadata.json", "artifact_manifest.json")
+LIVE_DATABASE_PATH = "/app/experiment-data/run.db"
+COMPOSE_PROFILES = ("--profile", "experiment", "--profile", "tools")
 RESOURCE_COLUMNS = (
     "recorded_at_utc",
     "container_id",
@@ -199,6 +204,37 @@ class ComposeClient:
         )
         return completed
 
+    def run_external(
+        self,
+        arguments: Sequence[str],
+        *,
+        check: bool = True,
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Run and log a Docker command which is not a Compose subcommand."""
+
+        command = list(arguments)
+        started = time.time()
+        try:
+            completed = self.command_runner(
+                command,
+                cwd=self.repository_root,
+                env=self.environment,
+                timeout=timeout,
+                check=check,
+            )
+        except subprocess.CalledProcessError as exc:
+            self._log_command(command, exc.returncode, exc.stdout or "", exc.stderr or "")
+            raise
+        self._log_command(
+            command,
+            completed.returncode,
+            completed.stdout or "",
+            completed.stderr or "",
+            elapsed_seconds=time.time() - started,
+        )
+        return completed
+
     def _log_command(
         self,
         command: Sequence[str],
@@ -240,7 +276,7 @@ def _phase_rows(entry: RunPlanEntry) -> list[dict[str, Any]]:
     return rows
 
 
-def _archive_retry_evidence(run_directory: Path, manifest: dict[str, Any]) -> None:
+def _archive_retry_evidence(run_directory: Path, manifest: dict[str, Any]) -> Path:
     """Move mutable evidence aside and preserve the prior manifest/phase plan."""
 
     attempt_number = int(manifest.get("attempt_number", 1))
@@ -251,10 +287,14 @@ def _archive_retry_evidence(run_directory: Path, manifest: dict[str, Any]) -> No
         "run.db",
         "run.db-wal",
         "run.db-shm",
+        "run.db-journal",
         "run.db.collector-state.json",
         "analytics.ready.json",
+        "analytics-container.log",
+        "integrity-report.json",
         "runtime.log",
         "resource_samples.csv",
+        "timing_samples.csv",
         "orchestration_events.csv",
         "messages.csv",
         "feature_windows.csv",
@@ -268,6 +308,10 @@ def _archive_retry_evidence(run_directory: Path, manifest: dict[str, Any]) -> No
         source = run_directory / name
         if source.exists():
             shutil.copy2(source, archive / name)
+    recovered_volume = run_directory / "runtime-volume-recovery"
+    if recovered_volume.exists():
+        shutil.move(str(recovered_volume), archive / recovered_volume.name)
+    return archive
 
 
 def prepare_run_attempt(
@@ -275,6 +319,8 @@ def prepare_run_attempt(
     entry: RunPlanEntry,
     *,
     retry_failed: bool,
+    code_version: str | None = None,
+    worktree_dirty: bool | None = None,
 ) -> dict[str, Any] | None:
     """Prepare a pending attempt; return ``None`` for a completed run."""
 
@@ -283,7 +329,7 @@ def prepare_run_attempt(
     status = str(manifest.get("status"))
     if status == "completed":
         return None
-    if status in {"failed", "aborted"} and not retry_failed:
+    if status in {"running", "failed", "aborted"} and not retry_failed:
         raise CampaignRunError(
             f"{entry.run_id} is {status}; pass --retry-failed to archive and retry"
         )
@@ -293,8 +339,12 @@ def prepare_run_attempt(
             "run.db",
             "run.db-wal",
             "run.db-shm",
+            "run.db-journal",
             "run.db.collector-state.json",
             "analytics.ready.json",
+            "analytics-container.log",
+            "integrity-report.json",
+            "runtime-volume-recovery",
         )
     )
     if status == "planned" and stale_files:
@@ -302,25 +352,44 @@ def prepare_run_attempt(
             f"planned run {entry.run_id} contains stale runtime evidence"
         )
     if status in {"running", "failed", "aborted"}:
-        prior = {
+        prior: dict[str, Any] = {
             "attempt_number": int(manifest.get("attempt_number", 1)),
             "status": status,
             "run_start_utc": manifest.get("run_start_utc"),
             "run_end_utc": manifest.get("run_end_utc"),
             "failure_reason": manifest.get("failure_reason"),
+            "code_version": manifest.get("code_version"),
+            "worktree_dirty": manifest.get("worktree_dirty"),
+            "collection_session_id": manifest.get("collection_session_id"),
+            "model_version": manifest.get("model_version"),
+            "runtime_volume_preserved": manifest.get("runtime_volume_preserved"),
+            "runtime_volume_project": manifest.get("runtime_volume_project"),
+            "runtime_volume_logical_name": manifest.get(
+                "runtime_volume_logical_name"
+            ),
             "archived_at_utc": utc_from_unix(time.time()),
         }
-        _archive_retry_evidence(run_directory, manifest)
+        archive = _archive_retry_evidence(run_directory, manifest)
+        prior["archive_directory"] = str(archive.relative_to(run_directory))
         history = list(manifest.get("attempt_history", []))
         history.append(prior)
         manifest.update(
             status="planned",
             attempt_number=prior["attempt_number"] + 1,
             attempt_history=history,
+            collection_session_id=str(uuid.uuid4()),
             run_start_utc=None,
             run_end_utc=None,
             failure_reason=None,
+            model_version=None,
+            runtime_volume_preserved=False,
+            runtime_volume_project=None,
+            runtime_volume_logical_name=None,
         )
+        if code_version is not None:
+            manifest["code_version"] = code_version
+        if worktree_dirty is not None:
+            manifest["worktree_dirty"] = worktree_dirty
         write_json_atomic(manifest_path, manifest)
         write_csv_atomic(
             run_directory / "scenario_phases.csv", PHASE_COLUMNS, _phase_rows(entry)
@@ -328,42 +397,127 @@ def prepare_run_attempt(
     else:
         manifest.setdefault("attempt_number", 1)
         manifest.setdefault("attempt_history", [])
+        if code_version is not None:
+            manifest["code_version"] = code_version
+        if worktree_dirty is not None:
+            manifest["worktree_dirty"] = worktree_dirty
         write_json_atomic(manifest_path, manifest)
     return manifest
 
 
 def _wait_for_devices(
-    database_path: Path,
+    compose: ComposeClient,
     *,
     device_count: int,
     timeout_seconds: float,
     clock: SystemClock,
 ) -> None:
+    """Wait using SQLite inside the Linux container, never from the macOS host."""
+
+    query = (
+        "import os,sqlite3;"
+        "c=sqlite3.connect(os.environ['SQLITE_PATH'],timeout=2);"
+        "print(c.execute(\"SELECT COUNT(DISTINCT device_id) "
+        "FROM mqtt_observations WHERE message_type='telemetry' "
+        "AND payload_valid=1 AND duplicate=0 AND retain=0\").fetchone()[0]);"
+        "c.close()"
+    )
     deadline = clock.monotonic() + timeout_seconds
-    last_error = "database not created"
+    last_error = "collector query has not completed"
     while clock.monotonic() < deadline:
-        if database_path.is_file():
+        completed = compose.run(
+            [*COMPOSE_PROFILES, "exec", "-T", "collector", "python", "-c", query],
+            check=False,
+            timeout=10,
+        )
+        if completed.returncode == 0:
             try:
-                with sqlite3.connect(database_path, timeout=2.0) as connection:
-                    observed = int(
-                        connection.execute(
-                            """
-                            SELECT COUNT(DISTINCT device_id)
-                            FROM mqtt_observations
-                            WHERE message_type = 'telemetry'
-                              AND payload_valid = 1
-                              AND duplicate = 0
-                              AND retain = 0
-                            """
-                        ).fetchone()[0]
-                    )
+                observed = int((completed.stdout or "").strip().splitlines()[-1])
+            except (IndexError, ValueError):
+                last_error = "collector query returned no integer count"
+            else:
                 if observed == device_count:
                     return
                 last_error = f"observed {observed}/{device_count} devices"
-            except sqlite3.Error as exc:
-                last_error = str(exc)
+        else:
+            last_error = (completed.stderr or completed.stdout or "query failed").strip()
         clock.sleep(min(0.5, max(0.0, deadline - clock.monotonic())))
     raise CampaignRunError(f"device readiness timed out: {last_error}")
+
+
+def _analytics_state(compose: ComposeClient) -> dict[str, Any]:
+    container = compose.run(
+        [*COMPOSE_PROFILES, "ps", "--all", "-q", "analytics"],
+        check=False,
+        timeout=15,
+    )
+    identifiers = [line.strip() for line in (container.stdout or "").splitlines() if line.strip()]
+    if len(identifiers) != 1:
+        raise CampaignRunError("Analytics container is missing or ambiguous")
+    inspected = compose.run_external(
+        ["docker", "inspect", "--format", "{{json .State}}", identifiers[0]],
+        check=False,
+        timeout=15,
+    )
+    if inspected.returncode != 0:
+        raise CampaignRunError(
+            "Analytics state inspection failed: "
+            + (inspected.stderr or inspected.stdout or "unknown error").strip()
+        )
+    try:
+        state = json.loads((inspected.stdout or "").strip())
+    except json.JSONDecodeError as exc:
+        raise CampaignRunError("Analytics state inspection returned invalid JSON") from exc
+    if not isinstance(state, dict):
+        raise CampaignRunError("Analytics state inspection returned a non-object")
+    return state
+
+
+def _assert_analytics_running(compose: ComposeClient) -> None:
+    state = _analytics_state(compose)
+    status = str(state.get("Status", "unknown"))
+    if status != "running":
+        code = state.get("ExitCode")
+        raise CampaignRunError(
+            f"Analytics exited before run completion (status={status}, exit_code={code})"
+        )
+
+
+def _wait_for_analytics_ready(
+    compose: ComposeClient,
+    ready_path: Path,
+    *,
+    timeout_seconds: float,
+    clock: SystemClock,
+) -> None:
+    deadline = clock.monotonic() + timeout_seconds
+    while clock.monotonic() < deadline:
+        if ready_path.is_file():
+            return
+        _assert_analytics_running(compose)
+        clock.sleep(min(0.25, max(0.0, deadline - clock.monotonic())))
+    raise CampaignRunError(f"readiness file timed out: {ready_path}")
+
+
+def _wait_for_analytics_exit(
+    compose: ComposeClient,
+    *,
+    timeout_seconds: float,
+    clock: SystemClock,
+) -> None:
+    deadline = clock.monotonic() + timeout_seconds
+    while clock.monotonic() < deadline:
+        state = _analytics_state(compose)
+        status = str(state.get("Status", "unknown"))
+        if status == "exited":
+            code = int(state.get("ExitCode", -1))
+            if code != 0:
+                raise CampaignRunError(f"Analytics exited with code {code}")
+            return
+        if status not in {"running", "created", "restarting"}:
+            raise CampaignRunError(f"Analytics entered unexpected state {status}")
+        clock.sleep(min(0.25, max(0.0, deadline - clock.monotonic())))
+    raise CampaignRunError("Analytics did not exit after its final watermark-safe pass")
 
 
 def _wait_for_file(
@@ -382,7 +536,9 @@ def _resource_sample(
 ) -> list[dict[str, str]]:
     identifiers = [
         line.strip()
-        for line in compose.run(["ps", "-q"], check=False, timeout=15).stdout.splitlines()
+        for line in compose.run(
+            [*COMPOSE_PROFILES, "ps", "-q"], check=False, timeout=15
+        ).stdout.splitlines()
         if line.strip()
     ]
     if not identifiers:
@@ -537,46 +693,278 @@ def _verify_run_database(
     return counts
 
 
-def _wait_for_analytics_completion(
-    database_path: Path,
-    *,
-    entry: RunPlanEntry,
-    timing: EffectiveTiming,
-    model_required: bool,
-    timeout_seconds: float,
-    clock: SystemClock,
-) -> None:
-    """Wait for Analytics' final watermark-safe pass instead of assuming timing."""
+def _git_source_state(repository_root: Path) -> tuple[str | None, bool | None]:
+    """Return the exact source revision used by a new attempt when available."""
 
-    expected = expected_window_count(
-        timing.total_seconds, device_count=entry.device_count
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repository_root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=repository_root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None, None
+    return (commit or None), bool(status.strip())
+
+
+def _stop_runtime_services(
+    compose: ComposeClient, *, require_clean_exit: bool = False
+) -> None:
+    stopped = compose.run(
+        [
+            *COMPOSE_PROFILES,
+            "stop",
+            "--timeout",
+            "15",
+            "analytics",
+            "simulator",
+            "collector",
+        ],
+        check=False,
+        timeout=45,
     )
-    deadline = clock.monotonic() + timeout_seconds
-    last_state = "derived tables unavailable"
-    while clock.monotonic() < deadline:
+    if stopped.returncode != 0:
+        raise CampaignRunError(
+            "Compose could not stop the SQLite runtime services: "
+            + (stopped.stderr or stopped.stdout or "unknown error").strip()
+        )
+    for service in ("analytics", "simulator", "collector"):
+        listed = compose.run(
+            [*COMPOSE_PROFILES, "ps", "--all", "-q", service],
+            check=False,
+            timeout=15,
+        )
+        if listed.returncode != 0:
+            raise CampaignRunError(f"Could not verify stopped service {service}")
+        for identifier in (
+            line.strip()
+            for line in (listed.stdout or "").splitlines()
+            if line.strip()
+        ):
+            inspected = compose.run_external(
+                ["docker", "inspect", "--format", "{{json .State}}", identifier],
+                check=False,
+                timeout=15,
+            )
+            if inspected.returncode != 0:
+                raise CampaignRunError(f"Could not inspect stopped service {service}")
+            try:
+                state = json.loads((inspected.stdout or "").strip())
+            except json.JSONDecodeError as exc:
+                raise CampaignRunError(
+                    f"Invalid state returned for stopped service {service}"
+                ) from exc
+            status = str(state.get("Status", "unknown")) if isinstance(state, dict) else "unknown"
+            if not isinstance(state, dict) or bool(state.get("Running")) or status not in {
+                "exited",
+                "dead",
+            }:
+                raise CampaignRunError(
+                    f"Service {service} is still active after Compose stop"
+                )
+            if require_clean_exit and int(state.get("ExitCode", -1)) != 0:
+                raise CampaignRunError(
+                    f"Service {service} exited uncleanly with code "
+                    f"{state.get('ExitCode')}"
+                )
+
+
+def _capture_analytics_log(compose: ComposeClient, destination: Path) -> None:
+    completed = compose.run(
+        [
+            *COMPOSE_PROFILES,
+            "logs",
+            "--no-color",
+            "--timestamps",
+            "analytics",
+        ],
+        check=False,
+        timeout=60,
+    )
+    output = (completed.stdout or "") + (completed.stderr or "")
+    if output.strip():
+        destination.write_text(output, encoding="utf-8")
+
+
+def _collector_container_id(compose: ComposeClient) -> str | None:
+    completed = compose.run(
+        [*COMPOSE_PROFILES, "ps", "--all", "-q", "collector"],
+        check=False,
+        timeout=15,
+    )
+    identifiers = [line.strip() for line in (completed.stdout or "").splitlines() if line.strip()]
+    return identifiers[0] if len(identifiers) == 1 else None
+
+
+def _validate_runtime_volume(compose: ComposeClient) -> dict[str, Any]:
+    """Checkpoint and validate the stopped Linux-local volume before copying it."""
+
+    script = (
+        "import json,os,sqlite3;"
+        "c=sqlite3.connect(os.environ['SQLITE_PATH'],timeout=30);"
+        "checkpoint=c.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchall();"
+        "integrity=[r[0] for r in c.execute('PRAGMA integrity_check').fetchall()];"
+        "c.close();"
+        "print(json.dumps({'checkpoint':checkpoint,'integrity_check':integrity},sort_keys=True));"
+        "checkpoint_clear=all(int(r[0])==0 for r in checkpoint);"
+        "raise SystemExit(0 if integrity==['ok'] and checkpoint_clear else 2)"
+    )
+    completed = compose.run(
+        [
+            *COMPOSE_PROFILES,
+            "run",
+            "--rm",
+            "--no-deps",
+            "collector",
+            "python",
+            "-c",
+            script,
+        ],
+        check=False,
+        timeout=90,
+    )
+    output_lines = [line for line in (completed.stdout or "").splitlines() if line.strip()]
+    details: dict[str, Any] = {
+        "status": "failed" if completed.returncode else "ok",
+        "returncode": completed.returncode,
+    }
+    if output_lines:
         try:
-            with sqlite3.connect(database_path, timeout=2.0) as connection:
-                feature_count = int(
-                    connection.execute("SELECT COUNT(*) FROM feature_windows").fetchone()[0]
-                )
-                prediction_count = int(
-                    connection.execute(
-                        "SELECT COUNT(*) FROM window_predictions"
-                    ).fetchone()[0]
-                )
-            last_state = (
-                f"feature_windows={feature_count}/{expected}, "
-                f"predictions={prediction_count}"
+            parsed = json.loads(output_lines[-1])
+        except json.JSONDecodeError:
+            details["stdout"] = completed.stdout.strip()
+        else:
+            if isinstance(parsed, dict):
+                details.update(parsed)
+    if completed.stderr:
+        details["stderr"] = completed.stderr.strip()
+    return details
+
+
+def _copy_runtime_artifacts(
+    compose: ComposeClient,
+    run_directory: Path,
+    *,
+    required: bool,
+) -> bool:
+    """Copy a closed runtime DB from the named volume through its stopped owner."""
+
+    container_id = _collector_container_id(compose)
+    if container_id is None:
+        if required:
+            raise CampaignRunError("Collector container is unavailable for DB snapshot")
+        return False
+    copied_database = False
+    for name, mandatory in (
+        ("run.db", True),
+        ("run.db-wal", False),
+        ("run.db-shm", False),
+        ("run.db-journal", False),
+        ("run.db.collector-state.json", True),
+    ):
+        destination = run_directory / name
+        if destination.exists():
+            copied_database = copied_database or name == "run.db"
+            continue
+        completed = compose.run_external(
+            [
+                "docker",
+                "cp",
+                f"{container_id}:/app/experiment-data/{name}",
+                str(destination),
+            ],
+            check=False,
+            timeout=60,
+        )
+        if completed.returncode == 0:
+            copied_database = copied_database or name == "run.db"
+        elif mandatory and required:
+            raise CampaignRunError(
+                "Failed to copy runtime database: "
+                + (completed.stderr or completed.stdout or "unknown error").strip()
             )
-            predictions_ready = (
-                not model_required or expected == 0 or prediction_count > 0
-            )
-            if feature_count == expected and predictions_ready:
-                return
-        except sqlite3.Error as exc:
-            last_state = str(exc)
-        clock.sleep(min(0.25, max(0.0, deadline - clock.monotonic())))
-    raise CampaignRunError(f"analytics finalization timed out: {last_state}")
+    return copied_database
+
+
+def _validate_collector_state(path: Path) -> dict[str, Any]:
+    """Require a clean, lossless Collector shutdown before accepting a run."""
+
+    snapshot = load_runtime_state(path)
+    if snapshot is None:
+        raise CampaignRunError("Collector runtime-state sidecar is missing or invalid")
+    state = {
+        "accepting_messages": snapshot.accepting_messages,
+        "queue_depth": snapshot.queue_depth,
+        "oldest_pending_received_at_unix": snapshot.oldest_pending_received_at_unix,
+        "last_enqueued_at_unix": snapshot.last_enqueued_at_unix,
+        "last_persisted_received_at_unix": snapshot.last_persisted_received_at_unix,
+        "dropped_message_count": snapshot.dropped_message_count,
+        "loss_event_count": len(snapshot.loss_events),
+    }
+    if snapshot.accepting_messages:
+        raise CampaignRunError("Collector was still accepting messages at snapshot time")
+    if snapshot.queue_depth != 0 or snapshot.oldest_pending_received_at_unix is not None:
+        raise CampaignRunError("Collector queue was not drained before snapshot")
+    if snapshot.dropped_message_count != 0 or snapshot.loss_events:
+        raise CampaignRunError("Collector reported message loss; run evidence is rejected")
+    return state
+
+
+def _write_integrity_report(
+    database_path: Path,
+    report_path: Path,
+    *,
+    container_check: Mapping[str, Any] | None,
+    collector_state: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "checked_at_utc": utc_from_unix(time.time()),
+        "database": database_path.name,
+        "database_size_bytes": database_path.stat().st_size,
+        "host_sqlite_version": sqlite3.sqlite_version,
+        "container_check": dict(container_check or {}),
+        "collector_state": dict(collector_state or {}),
+    }
+    try:
+        uri = f"file:{database_path.resolve()}?mode=ro"
+        with sqlite3.connect(uri, uri=True, timeout=30.0) as connection:
+            quick = [str(row[0]) for row in connection.execute("PRAGMA quick_check")]
+            integrity = [str(row[0]) for row in connection.execute("PRAGMA integrity_check")]
+        report["quick_check"] = quick
+        report["integrity_check"] = integrity
+        report["status"] = "ok" if quick == ["ok"] and integrity == ["ok"] else "failed"
+    except sqlite3.Error as exc:
+        report.update(status="failed", error=f"{type(exc).__name__}: {exc}")
+    write_json_atomic(report_path, report)
+    if report["status"] != "ok" or (
+        container_check is not None and container_check.get("status") != "ok"
+    ):
+        raise CampaignRunError("SQLite integrity validation failed; run evidence is rejected")
+    return report
+
+
+def _remove_runtime_project(compose: ComposeClient) -> None:
+    removed = compose.run(
+        [*COMPOSE_PROFILES, "down", "--remove-orphans", "--volumes"],
+        check=False,
+        timeout=60,
+    )
+    if removed.returncode != 0:
+        raise CampaignRunError(
+            "Compose could not remove the prior runtime project and volume: "
+            + (removed.stderr or removed.stdout or "unknown error").strip()
+        )
 
 
 @dataclass(slots=True)
@@ -596,10 +984,16 @@ class CampaignRunner:
     clock: SystemClock = SystemClock()
 
     def _model_ready(self) -> bool:
-        return bool(
-            self.model_directory
-            and all((self.model_directory / name).is_file() for name in MODEL_FILES)
-        )
+        if self.model_directory is None or not all(
+            (self.model_directory / name).is_file() for name in MODEL_FILES
+        ):
+            return False
+        try:
+            artifact = load_artifact(self.model_directory, trusted=True)
+            manifest = _read_json(self.model_directory / "artifact_manifest.json")
+        except (OSError, ValueError, RuntimeError, CampaignRunError):
+            return False
+        return str(manifest.get("model_version") or "") == artifact.metadata.model_version
 
     def _ensure_model(self, environment: Mapping[str, str]) -> None:
         if self._model_ready():
@@ -644,14 +1038,71 @@ class CampaignRunner:
 
     def run_entry(self, entry: RunPlanEntry) -> str:
         run_directory = self.results_root / "runs" / entry.run_id
+        existing = _read_json(run_directory / "run_manifest.json")
+        existing_status = str(existing.get("status"))
+        source_commit, worktree_dirty = _git_source_state(self.repository_root)
+
+        # A retry can only archive evidence after any stale writer has stopped.
+        # If a previous runner died before snapshotting its named volume, recover
+        # that closed DB first. Explicit --retry-failed is required before this
+        # cleanup can affect a possibly still-active `running` attempt.
+        if existing_status in {"running", "failed", "aborted"} and self.retry_failed:
+            stale_environment = os.environ.copy()
+            stale_environment["SQLITE_PATH"] = LIVE_DATABASE_PATH
+            stale_compose = ComposeClient(
+                repository_root=self.repository_root,
+                compose_file=self.compose_file,
+                project_name=self.project_name,
+                environment=stale_environment,
+                command_runner=self.command_runner,
+                runtime_log=run_directory / "runtime.log",
+            )
+            _stop_runtime_services(stale_compose)
+            _capture_analytics_log(
+                stale_compose, run_directory / "analytics-container.log"
+            )
+            if _collector_container_id(stale_compose):
+                recovery_directory = run_directory / "runtime-volume-recovery"
+                recovery_directory.mkdir(parents=True, exist_ok=True)
+                stale_check = _validate_runtime_volume(stale_compose)
+                _copy_runtime_artifacts(
+                    stale_compose, recovery_directory, required=True
+                )
+                try:
+                    recovered_state = _validate_collector_state(
+                        recovery_directory / "run.db.collector-state.json"
+                    )
+                except CampaignRunError as exc:
+                    recovered_state = {"validation_error": str(exc)}
+                try:
+                    _write_integrity_report(
+                        recovery_directory / "run.db",
+                        recovery_directory / "integrity-report.json",
+                        container_check=stale_check,
+                        collector_state=recovered_state,
+                    )
+                except CampaignRunError:
+                    # Invalid evidence remains valuable for provenance. It is
+                    # copied before the live volume is removed and is never an
+                    # eligible model/evaluation input.
+                    pass
+            stale_compose.run(
+                [*COMPOSE_PROFILES, "logs", "--no-color", "--timestamps"],
+                check=False,
+                timeout=60,
+            )
+            _remove_runtime_project(stale_compose)
+
         manifest = prepare_run_attempt(
-            run_directory, entry, retry_failed=self.retry_failed
+            run_directory,
+            entry,
+            retry_failed=self.retry_failed,
+            code_version=source_commit,
+            worktree_dirty=worktree_dirty,
         )
         if manifest is None:
             return "skipped_completed"
         timing = effective_timing(entry, self.smoke_duration_seconds)
-        if entry.split == "test":
-            self._ensure_model(os.environ.copy())
 
         database_path = run_directory / "run.db"
         ready_path = run_directory / "analytics.ready.json"
@@ -663,9 +1114,10 @@ class CampaignRunner:
         environment = os.environ.copy()
         environment.update(
             {
-                "SQLITE_PATH": (
-                    f"{container_results_root}/runs/{entry.run_id}/run.db"
-                ),
+                # SQLite WAL remains wholly inside the Docker Linux VM. The
+                # stopped, checkpointed DB is copied to results after each run.
+                "SQLITE_PATH": LIVE_DATABASE_PATH,
+                "COLLECTOR_STATE_FILE": f"{LIVE_DATABASE_PATH}.collector-state.json",
                 "SIMULATION_SEED": str(entry.simulation_seed),
                 "EXPERIMENT_RUN_ID": entry.run_id,
                 "COLLECTION_SESSION_ID": collection_session_id,
@@ -689,14 +1141,21 @@ class CampaignRunner:
             runtime_log=runtime_log,
         )
         model_version: str | None = None
-        if entry.split == "test" and self.model_directory is not None:
-            metadata = _read_json(self.model_directory / "model_metadata.json")
-            model_version = str(metadata.get("model_version") or "") or None
 
         started_manifest = False
         completed = False
+        runtime_started = False
+        runtime_stopped = False
+        runtime_snapshot_verified = False
+        container_check: dict[str, Any] | None = None
         try:
-            compose.run(["down", "--remove-orphans"], check=False, timeout=60)
+            if entry.split == "test":
+                self._ensure_model(environment)
+                if self.model_directory is None:  # defensive; _ensure_model raises
+                    raise CampaignRunError("test run has no model directory")
+                metadata = _read_json(self.model_directory / "model_metadata.json")
+                model_version = str(metadata.get("model_version") or "") or None
+            _remove_runtime_project(compose)
             up_base = [
                 "up",
                 "-d",
@@ -706,6 +1165,7 @@ class CampaignRunner:
             ]
             if self.build:
                 up_base.append("--build")
+            runtime_started = True
             compose.run(
                 [*up_base, "mosquitto", "collector"],
                 timeout=self.startup_timeout_seconds + 60,
@@ -734,6 +1194,9 @@ class CampaignRunner:
                                 *manifest.get("output_files", []),
                                 "orchestration_events.csv",
                                 "run.db.collector-state.json",
+                                "run.db",
+                                "integrity-report.json",
+                                "analytics-container.log",
                             ]
                         )
                     ),
@@ -747,7 +1210,8 @@ class CampaignRunner:
                 ["--profile", "experiment", "up", "-d", "analytics"],
                 timeout=self.startup_timeout_seconds,
             )
-            _wait_for_file(
+            _wait_for_analytics_ready(
+                compose,
                 ready_path,
                 timeout_seconds=self.startup_timeout_seconds,
                 clock=self.clock,
@@ -770,7 +1234,7 @@ class CampaignRunner:
                 timeout=self.startup_timeout_seconds + 30,
             )
             _wait_for_devices(
-                database_path,
+                compose,
                 device_count=entry.device_count,
                 timeout_seconds=self.startup_timeout_seconds,
                 clock=self.clock,
@@ -786,6 +1250,8 @@ class CampaignRunner:
             scenario_triggered = entry.scenario == "normal"
             while True:
                 now_mono = self.clock.monotonic()
+                if now_mono < end_deadline:
+                    _assert_analytics_running(compose)
                 if not scenario_triggered and now_mono >= scenario_deadline:
                     compose.run(
                         [
@@ -836,14 +1302,25 @@ class CampaignRunner:
                 )
             )
             self.clock.sleep(self.settle_grace_seconds)
-            _wait_for_analytics_completion(
-                database_path,
-                entry=entry,
-                timing=timing,
-                model_required=entry.split == "test",
+            _wait_for_analytics_exit(
+                compose,
                 timeout_seconds=self.startup_timeout_seconds,
                 clock=self.clock,
             )
+            _stop_runtime_services(compose, require_clean_exit=True)
+            runtime_stopped = True
+            container_check = _validate_runtime_volume(compose)
+            _copy_runtime_artifacts(compose, run_directory, required=True)
+            collector_state = _validate_collector_state(
+                run_directory / "run.db.collector-state.json"
+            )
+            _write_integrity_report(
+                database_path,
+                run_directory / "integrity-report.json",
+                container_check=container_check,
+                collector_state=collector_state,
+            )
+            runtime_snapshot_verified = True
             scenario_bounds = (
                 None
                 if entry.scenario == "normal"
@@ -883,6 +1360,18 @@ class CampaignRunner:
             )
             completed = True
             return "completed"
+        except KeyboardInterrupt:
+            current = _read_json(run_directory / "run_manifest.json")
+            if current.get("status") in {"planned", "running"}:
+                update_run_manifest(
+                    run_directory / "run_manifest.json",
+                    status="aborted",
+                    changes={
+                        "run_end_utc": utc_from_unix(self.clock.wall()),
+                        "failure_reason": "KeyboardInterrupt: campaign interrupted",
+                    },
+                )
+            raise
         except Exception as exc:
             if started_manifest:
                 update_run_manifest(
@@ -906,29 +1395,59 @@ class CampaignRunner:
                     )
             raise
         finally:
-            # Cleanup must never hide the primary run failure. Compose command
-            # output, including service logs, is already appended to runtime.log.
-            for cleanup_arguments, cleanup_timeout in (
-                (
-                    [
-                        "stop",
-                        "--timeout",
-                        "15",
-                        "analytics",
-                        "simulator",
-                        "collector",
-                    ],
-                    45,
-                ),
-                (["logs", "--no-color", "--timestamps"], 60),
-                (["down", "--remove-orphans"], 60),
-            ):
+            # Preserve a closed snapshot even for failed/aborted attempts, but
+            # never allow cleanup failures to hide the primary exception.
+            if runtime_started and not runtime_stopped:
                 try:
-                    compose.run(
-                        cleanup_arguments, check=False, timeout=cleanup_timeout
-                    )
-                except (OSError, subprocess.SubprocessError):
+                    _stop_runtime_services(compose)
+                    runtime_stopped = True
+                except (CampaignRunError, OSError, subprocess.SubprocessError):
                     pass
+            if runtime_started and runtime_stopped and not runtime_snapshot_verified:
+                try:
+                    container_check = _validate_runtime_volume(compose)
+                    _copy_runtime_artifacts(compose, run_directory, required=True)
+                    collector_state = _validate_collector_state(
+                        run_directory / "run.db.collector-state.json"
+                    )
+                    _write_integrity_report(
+                        database_path,
+                        run_directory / "integrity-report.json",
+                        container_check=container_check,
+                        collector_state=collector_state,
+                    )
+                    runtime_snapshot_verified = True
+                except (CampaignRunError, OSError, subprocess.SubprocessError):
+                    pass
+            try:
+                _capture_analytics_log(
+                    compose, run_directory / "analytics-container.log"
+                )
+                compose.run(
+                    [*COMPOSE_PROFILES, "logs", "--no-color", "--timestamps"],
+                    check=False,
+                    timeout=60,
+                )
+            except (OSError, subprocess.SubprocessError):
+                pass
+            if not runtime_started or runtime_snapshot_verified:
+                try:
+                    _remove_runtime_project(compose)
+                except (CampaignRunError, OSError, subprocess.SubprocessError):
+                    pass
+            elif (run_directory / "run_manifest.json").is_file():
+                current = _read_json(run_directory / "run_manifest.json")
+                current_status = str(current.get("status"))
+                if current_status in {"failed", "aborted"}:
+                    update_run_manifest(
+                        run_directory / "run_manifest.json",
+                        status=current_status,
+                        changes={
+                            "runtime_volume_preserved": True,
+                            "runtime_volume_project": self.project_name,
+                            "runtime_volume_logical_name": "experiment_data",
+                        },
+                    )
             if not completed:
                 if resource_rows:
                     write_csv_atomic(
@@ -1088,18 +1607,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     failures: list[str] = []
     all_entries = load_run_plan(plan_path)
     _refresh_campaign_manifest(results_root, all_entries)
-    for entry in entries:
-        try:
-            outcome = runner.run_entry(entry)
-            print(f"{entry.run_id}: {outcome}")
-        except Exception as exc:  # retain the exact failed-run evidence
-            failures.append(entry.run_id)
-            print(f"{entry.run_id}: failed: {exc}")
-            _refresh_campaign_manifest(results_root, all_entries)
-            if not arguments.continue_on_error:
-                break
-        else:
-            _refresh_campaign_manifest(results_root, all_entries)
+    try:
+        for entry in entries:
+            try:
+                outcome = runner.run_entry(entry)
+                print(f"{entry.run_id}: {outcome}")
+            except Exception as exc:  # retain the exact failed-run evidence
+                failures.append(entry.run_id)
+                print(f"{entry.run_id}: failed: {exc}")
+                if not arguments.continue_on_error:
+                    break
+    finally:
+        # KeyboardInterrupt is a BaseException: run_entry marks it aborted and
+        # this final refresh keeps the campaign manifest consistent.
+        _refresh_campaign_manifest(results_root, all_entries)
     if failures:
         print(f"Campaign stopped with failed runs: {', '.join(failures)}")
         return 2
