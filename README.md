@@ -184,8 +184,10 @@ T01-T16 all passed.
 These artifacts are local experimental output and remain ignored by Git through
 `/results/`; they are not present on the remote repository. Accepted normal,
 training, and validation runs use source commit `25e22c8`; accepted K2-K4 runs
-use `6fa9970`, which adds the scenario-phase watermark-lag fix. The only current
-Chapter IV evidence-delivery gap is a retained set of dashboard screenshots.
+use `6fa9970`, which adds the scenario-phase watermark-lag fix. Two read-only
+dashboard screenshots from `test-k2-01` are retained with Chapter IV. The
+remaining evidence-delivery gaps are a separate `demo-*` run and a dedicated
+alert-to-source-window drill-down screenshot.
 
 ## Model and inference contract
 

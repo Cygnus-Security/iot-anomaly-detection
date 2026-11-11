@@ -345,10 +345,11 @@ mô tả **visualization chỉ đọc** trên snapshot đã hoàn tất của `t
 không gọi đó là demo live và không đưa run này ra khỏi tập test. Snapshot có 12
 thiết bị, 396 prediction và 15 alert.
 
-Phiên thực hiện tài liệu không có browser điều khiển được kết nối, nên không thể
-chụp ảnh giao diện thật. Không tạo ảnh giả để thay bằng chứng. Khi có browser,
-dashboard cần được mở trên đúng `results/runs/test-k2-01/run.db`, chọn toàn bộ
-khoảng thời gian và lưu ảnh cùng run ID/thời điểm chụp.
+Hai ảnh giao diện thật được chụp ngày 11/11/2026 khoảng 20:54 (UTC+7) từ
+dashboard đọc `results/runs/test-k2-01/run.db`, với bộ lọc **All data**. Ảnh
+không được dựng lại hoặc chỉnh sửa nội dung. Ảnh thử nghiệm dùng phạm vi **Last
+15 minutes** bị loại vì snapshot đã dừng và phạm vi đó không chứa dữ liệu lịch
+sử cần trình bày.
 
 ### 4.4.1. Giám sát hoạt động của các thiết bị IoT
 
@@ -359,8 +360,14 @@ tổng quan có đủ 12 thiết bị, 721 telemetry hợp lệ, 0 payload lỗi
 online và tốc độ 60 giây bằng 0; đây là trạng thái đúng của snapshot đã dừng,
 không phải lỗi thu thập. Riêng `iot-001` có 321 telemetry, sequence cuối 320,
 payload trung bình 370,7 byte và khoảng cách liên bản tin trung bình 0,548 giây.
-Ảnh tổng quan 12 thiết bị là bằng chứng giao diện còn thiếu do browser không khả
-dụng trong phiên này.
+
+Hình 4.5 cho thấy tab **Devices** với phạm vi **All data** và **All devices**.
+Bảng 100 bản tin gần nhất hiển thị trực tiếp thời điểm nhận, thiết bị, topic,
+sequence, kích thước payload, khoảng cách liên bản tin, nhãn ground truth và
+trạng thái kiểm tra payload. Vì đây là snapshot sau khi run kết thúc, chỉ số
+0/12 thiết bị đang hoạt động không mâu thuẫn với 721 telemetry đã lưu.
+
+![Hình 4.5. Dashboard hiển thị dữ liệu MQTT đã lưu của test-k2-01](assets/chapter4/dashboard-messages-test-k2-01.png)
 
 ### 4.4.2. Phát hiện và hiển thị cảnh báo bất thường
 
@@ -369,8 +376,11 @@ nhãn và alert đã lưu. Với `test-k2-01`, dữ liệu thật có 396 predic
 alert trên 5 thiết bị. Các alert lấy từ
 `window_predictions`/`anomaly_alerts`, không suy ra từ tên kịch bản. Bộ lọc
 thiết bị áp dụng cho biểu đồ và bảng prediction, còn phần tổng hợp alert hiện
-vẫn phản ánh toàn run; đây là giới hạn giao diện cần tránh diễn giải sai. Ảnh
-tab AI & Alerts chưa được chụp vì không có browser kết nối.
+vẫn phản ánh toàn run; đây là giới hạn giao diện cần tránh diễn giải sai. Hình
+4.6 xác nhận dashboard đọc được 396 prediction, 15 alert trên 5 thiết bị, biểu
+đồ score so với ngưỡng đóng băng và metadata model của từng quyết định.
+
+![Hình 4.6. Dashboard AI & Alerts của test-k2-01](assets/chapter4/dashboard-ai-alerts-test-k2-01.png)
 
 ### 4.4.3. Truy vết dữ liệu liên quan đến cảnh báo
 
@@ -388,8 +398,10 @@ kiện đầu tiên, độ trễ 3,687088 giây. Transition bị loại khỏi m
 được phép tính cho event latency. T10 đã tái tạo cả 396 vector và prediction của
 run với 0 sai khác. Dashboard hiện chưa có liên kết click-through trực tiếp từ
 alert tới các dòng telemetry nguồn, nên truy vết đầy đủ phải dùng `window_id`
-để nối các bảng/CSV đã lưu. Ảnh drill-down window–prediction–alert chưa được
-chụp vì browser không khả dụng.
+để nối các bảng/CSV đã lưu. Hai ảnh hiện có chứng minh lớp dữ liệu thô và lớp
+quyết định ML, nhưng chưa phải ảnh drill-down riêng cho cửa sổ
+`test-k2-01:iot-001:000009`; truy vết định lượng ở trên vẫn dựa trên SQLite và
+CSV đã lưu.
 
 ## 4.5. Đánh giá chung và hướng phát triển
 
@@ -433,7 +445,8 @@ median 2,024 giây, p95 2,066 giây dù runner đặt mục tiêu một giây.
 - Chiến dịch dùng hai commit nguồn, dù provenance từng run được giữ đầy đủ.
 - Collector chỉ quan sát telemetry Broker chuyển tiếp, không phải toàn bộ lưu
   lượng mạng hay mọi hành vi endpoint.
-- Chưa có run `demo-*` riêng và chưa có ảnh dashboard do browser không khả dụng.
+- Chưa có run `demo-*` riêng; hai ảnh dashboard hiện tại chỉ là snapshot đọc
+  lại `test-k2-01`, và chưa có ảnh drill-down riêng cho cửa sổ cảnh báo cụ thể.
 
 ### 4.5.3. Hướng mở rộng và tích hợp phần cứng thực
 

@@ -463,8 +463,9 @@ median latency; two K4 events were missed. K3 and K4 window-level recall remaine
 zero, so event-level detection must not be presented as successful classification
 of fully contained anomaly windows. Replay of `test-k2-01` reproduced 396 feature
 rows and predictions with zero mismatches, and T01-T16 all passed. The local
-`results/` evidence is Git-ignored; dashboard screenshots remain the only current
-Chapter IV evidence-delivery gap.
+`results/` evidence is Git-ignored. Chapter IV retains two read-only dashboard
+screenshots from `test-k2-01`; it does not yet retain a separate `demo-*` run or
+a dedicated alert-to-source-window drill-down screenshot.
 
 ## 12. References
 

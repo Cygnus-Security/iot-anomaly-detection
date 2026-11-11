@@ -60,8 +60,10 @@ passed.
 
 Accepted normal, training, and validation runs use commit `25e22c8`; accepted
 K2-K4 runs use `6fa9970` after the scenario-phase watermark-lag fix. Generated
-evidence remains local under the Git-ignored `results/` directory. Retained
-dashboard screenshots are the only current Chapter IV evidence-delivery gap.
+evidence remains local under the Git-ignored `results/` directory. Two
+read-only dashboard screenshots from `test-k2-01` are retained with the report;
+a separate `demo-*` run and a dedicated alert-to-source-window drill-down
+screenshot remain evidence-delivery gaps.
 
 ## 3. Preflight
 

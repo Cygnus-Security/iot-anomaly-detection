@@ -57,8 +57,9 @@ Current source state: the frozen 13-run plan, resumable Compose runner,
 functional evidence matrix, exporter, evaluator, and automatic figures are
 implemented. Phase 5 completed 13/13 live runs, generated the evaluation
 artifacts, passed T01-T16, and retained unfavorable outcomes. The local
-`results/` directory remains Git-ignored. Dashboard screenshots are the only
-current Chapter IV evidence-delivery gap.
+`results/` directory remains Git-ignored. Two read-only dashboard screenshots
+from `test-k2-01` are retained; a separate `demo-*` run and a dedicated
+alert-to-source-window drill-down screenshot remain evidence-delivery gaps.
 
 ## Parallel work boundaries
 
