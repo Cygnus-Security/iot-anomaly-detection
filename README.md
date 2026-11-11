@@ -165,29 +165,18 @@ figures:
 See [Chapter IV Runbook](docs/CHAPTER4_RUNBOOK.md) for live-evidence format,
 result files, recovery rules, and validity gates.
 
-## Measured Chapter IV result
+## Generated result policy
 
-The complete Vietnamese chapter is available in
-[Chapter IV Experimental Results](docs/CHAPTER4_RESULTS.md).
+Experimental data, model artifacts, metrics, figures, screenshots, and assembled
+result reports are local outputs and are not committed. Git ignores the primary
+result tree at `/results/`, the optional local Chapter IV report at
+`/docs/CHAPTER4_RESULTS.md`, and copied Chapter IV evidence under
+`/docs/assets/chapter4/`.
 
-The local, generated `results/` tree records 13/13 completed runs and 6,300
-scheduled windows. All 4,248 held-out windows were scored; 4,176 fully labelled
-windows entered the primary confusion matrix: TP=16, FP=43, TN=4,061, and FN=56
-(Precision 0.2712, Recall 0.2222, F1 0.2443, FPR 0.01048). The separate
-phase-intersection event criterion detected 7/9 scenario events with 3.710-second
-median latency; two K4 events were missed. Event detection and fully-contained
-anomaly-window classification are different metrics: K3 and K4 both have zero
-window-level recall in this campaign. Offline replay of `test-k2-01` reproduced
-all 396 feature rows and predictions with zero mismatches, and functional checks
-T01-T16 all passed.
-
-These artifacts are local experimental output and remain ignored by Git through
-`/results/`; they are not present on the remote repository. Accepted normal,
-training, and validation runs use source commit `25e22c8`; accepted K2-K4 runs
-use `6fa9970`, which adds the scenario-phase watermark-lag fix. Two read-only
-dashboard screenshots from `test-k2-01` are retained with Chapter IV. The
-remaining evidence-delivery gaps are a separate `demo-*` run and a dedicated
-alert-to-source-window drill-down screenshot.
+Run the export and evaluation commands above to recreate machine-generated
+evidence. Do not force-add those output paths. The canonical experiment plan,
+split manifest, schemas, implementation, and reproducibility instructions remain
+tracked because they are source inputs rather than results.
 
 ## Model and inference contract
 

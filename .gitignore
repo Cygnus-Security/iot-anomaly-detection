@@ -29,4 +29,8 @@ mosquitto_logs/
 *.csv
 !experiments/run_plan.csv
 /results/
+
+# Generated report copies and Chapter IV evidence
+/docs/CHAPTER4_RESULTS.md
+/docs/assets/chapter4/
 .DS_Store

@@ -4,8 +4,8 @@
 
 **Boundary:** repository source, schemas, configuration, automated contract
 tests, and the completed local 13-run campaign. Metrics below are read from
-generated artifacts. Two read-only dashboard screenshots from `test-k2-01` are
-retained as historical-run views.
+generated artifacts. Result reports, figures, and dashboard screenshots remain
+local ignored outputs and are not repository evidence.
 
 ## 1. Status language
 
@@ -30,7 +30,7 @@ K3, or K4 label is not an Isolation Forest detection.
 | Experiment orchestration | Implemented and live-verified | The canonical campaign completed 13/13 isolated runs; every accepted database passed its integrity gate and failed attempts remain archived |
 | Export and evaluation | Implemented and live-measured | The complete scheduled grid contains 6,300 windows; held-out confusion, coverage, event timing, and figures were generated without manual values |
 | Functional evidence | Implemented and live-verified | T01-T16 all passed with explicit automated and live evidence; T10 replay reproduced 396 feature rows and predictions with zero mismatches |
-| Dashboard | Implemented; two screenshots retained | Read-only raw/scenario views plus all predictions, score/threshold chart, model version, and alerts; no label-to-alert substitution |
+| Dashboard | Implemented; screenshots remain local outputs | Read-only raw/scenario views plus all predictions, score/threshold chart, model version, and alerts; no label-to-alert substitution |
 | Physical hardware | Out of scope for current evidence | Protocol replacement contract exists; no ESP32 conformance run is claimed |
 
 ## 3. Key contract findings
@@ -94,10 +94,9 @@ classification for fully contained anomaly windows.
 
 Accepted normal, train, and validation runs use commit `25e22c8`; accepted K2-K4
 runs use `6fa9970`, whose only intervening source change handles scenario-phase
-watermark lag. The generated `results/` tree is local and Git-ignored. Two
-dashboard screenshots were captured from the named `test-k2-01` snapshot with
-the **All data** filter. A separate `demo-*` run and a dedicated
-alert-to-source-window drill-down screenshot remain outstanding.
+watermark lag. The generated `results/` tree is local and Git-ignored. Any
+assembled report, copied figure, or dashboard screenshot is likewise a local
+output and is not committed.
 
 ## 5. Remaining design limits
 
@@ -120,6 +119,5 @@ The repository now implements the MQTT-to-SQLite path, exact scheduled feature
 contract, Isolation Forest lifecycle, online decision persistence, dashboard,
 campaign orchestration, and reproducible evaluation. The frozen plan and
 functional matrix have been executed; measured limitations, including low
-window-level anomaly recall, remain part of the result. The retained dashboard
-screenshots provide raw-data and AI-alert views, but do not establish a separate
-live demo or direct alert-to-source-window drill-down.
+window-level anomaly recall, remain part of the result. Generated reports and
+visual evidence stay outside the tracked source tree.
