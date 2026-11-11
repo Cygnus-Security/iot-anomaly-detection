@@ -30,8 +30,9 @@ ground-truth field enters the model; reported metrics are generated artifacts.
 Current source state: the shared window/feature implementation, Isolation
 Forest fit/calibration and trusted artifact contract, analytics persistence,
 training/export/evaluation CLIs, and their deterministic tests are implemented.
-This completes the implementation gate; it does not predeclare held-out
-campaign metrics.
+The completed campaign generated the artifact and held-out metrics rather than
+predeclaring them: window-level F1 is 0.2443 and the separate event rule detected
+7/9 phases.
 
 ## Phase 4 - Dashboard and integration
 
@@ -54,8 +55,10 @@ Gate: a clean machine can reproduce the experiment and metrics from source.
 
 Current source state: the frozen 13-run plan, resumable Compose runner,
 functional evidence matrix, exporter, evaluator, and automatic figures are
-implemented. Phase 5 remains incomplete until the live campaign finishes and
-its generated `results/` artifacts pass the validity gates.
+implemented. Phase 5 completed 13/13 live runs, generated the evaluation
+artifacts, passed T01-T16, and retained unfavorable outcomes. The local
+`results/` directory remains Git-ignored. Dashboard screenshots are the only
+current Chapter IV evidence-delivery gap.
 
 ## Parallel work boundaries
 

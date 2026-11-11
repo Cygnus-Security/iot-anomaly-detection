@@ -165,6 +165,25 @@ figures:
 See [Chapter IV Runbook](docs/CHAPTER4_RUNBOOK.md) for live-evidence format,
 result files, recovery rules, and validity gates.
 
+## Measured Chapter IV result
+
+The local, generated `results/` tree records 13/13 completed runs and 6,300
+scheduled windows. All 4,248 held-out windows were scored; 4,176 fully labelled
+windows entered the primary confusion matrix: TP=16, FP=43, TN=4,061, and FN=56
+(Precision 0.2712, Recall 0.2222, F1 0.2443, FPR 0.01048). The separate
+phase-intersection event criterion detected 7/9 scenario events with 3.710-second
+median latency; two K4 events were missed. Event detection and fully-contained
+anomaly-window classification are different metrics: K3 and K4 both have zero
+window-level recall in this campaign. Offline replay of `test-k2-01` reproduced
+all 396 feature rows and predictions with zero mismatches, and functional checks
+T01-T16 all passed.
+
+These artifacts are local experimental output and remain ignored by Git through
+`/results/`; they are not present on the remote repository. Accepted normal,
+training, and validation runs use source commit `25e22c8`; accepted K2-K4 runs
+use `6fa9970`, which adds the scenario-phase watermark-lag fix. The only current
+Chapter IV evidence-delivery gap is a retained set of dashboard screenshots.
+
 ## Model and inference contract
 
 - Each sample is one device window anchored to the real run start.

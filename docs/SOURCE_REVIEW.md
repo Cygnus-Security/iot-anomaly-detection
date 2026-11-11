@@ -2,16 +2,15 @@
 
 **Review date:** 2026-11-11
 
-**Boundary:** repository source, schemas, configuration, and automated contract
-tests. The frozen 13-run campaign is a separate evidence gate; this review does
-not invent its model, metrics, resource values, figures, or screenshots.
+**Boundary:** repository source, schemas, configuration, automated contract
+tests, and the completed local 13-run campaign. Metrics below are read from
+generated artifacts; screenshots are not claimed because none are retained.
 
 ## 1. Status language
 
 - **Implemented:** source and deterministic contract tests exist.
 - **Live-verified:** a cited real MQTT or service run produced the evidence.
-- **Campaign pending:** the executable path exists, but the main held-out run has
-  not yet produced a result artifact for this source review.
+- **Live-measured:** completed campaign artifacts contain the reported value.
 - **Out of scope:** physical ESP32 and production deployment claims.
 
 Ground-truth scenario events, raw data, and ML decisions remain distinct. A K2,
@@ -27,10 +26,10 @@ K3, or K4 label is not an Isolation Forest detection.
 | Feature windows | Implemented | Scheduled all-device grid, 20-second/5-second `[start,end)` windows, minimum three messages, exact seven-feature schema, quality and truth kept separate |
 | Isolation Forest | Implemented | Frozen initial configuration, normal-only fit, validation 1% threshold, strict `<` decision rule, checksum/compatibility-checked trusted artifact |
 | Online analytics | Implemented | Per-run derived tables, every valid prediction, inference-call timing, alert subset, final reconciliation, no-model data gate |
-| Experiment orchestration | Implemented; campaign pending | Canonical 13-run plan, non-overwriting manifests, isolated databases, train-to-test order, trainer hook, resource sampling, phase evidence, retries archived |
-| Export and evaluation | Implemented; campaign pending | Complete scheduled-grid left join, coverage/exclusions, by-run/scenario counts, NA semantics, event detection, figures |
-| Functional evidence | Implemented; live checks pending where required | T01-T16 mapping executes explicit automated nodes and consumes explicit live evidence; missing evidence becomes `not_run` |
-| Dashboard | Implemented | Read-only raw/scenario views plus all predictions, score/threshold chart, model version, and alerts; no label-to-alert substitution |
+| Experiment orchestration | Implemented and live-verified | The canonical campaign completed 13/13 isolated runs; every accepted database passed its integrity gate and failed attempts remain archived |
+| Export and evaluation | Implemented and live-measured | The complete scheduled grid contains 6,300 windows; held-out confusion, coverage, event timing, and figures were generated without manual values |
+| Functional evidence | Implemented and live-verified | T01-T16 all passed with explicit automated and live evidence; T10 replay reproduced 396 feature rows and predictions with zero mismatches |
+| Dashboard | Implemented; screenshot delivery pending | Read-only raw/scenario views plus all predictions, score/threshold chart, model version, and alerts; no label-to-alert substitution |
 | Physical hardware | Out of scope for current evidence | Protocol replacement contract exists; no ESP32 conformance run is claimed |
 
 ## 3. Key contract findings
@@ -82,23 +81,21 @@ and a normal/anomaly label. Transition and unknown rows remain exportable but do
 not enter the primary confusion matrix. Scenario aggregates sum counts before
 computing ratios; undefined denominators remain NA with a reason.
 
-## 4. Evidence gates still requiring live execution
+## 4. Measured evidence and remaining delivery gap
 
-1. Run functional checks T01-T16 and retain broker/service/slow-worker evidence
-   for checks that cannot pass from unit tests alone.
-2. Complete both train runs and the validation run, inspect feature quality, and
-   freeze the generated artifact before any test run.
-3. Complete K1 and all nine K2-K4 held-out runs; keep unfavorable outcomes.
-4. Verify K2-K4 behavior from observed rate, gap, and payload features rather
-   than filenames or commands.
-5. Export every run and generate coverage, confusion counts, Precision, Recall,
-   F1, FPR, event states/latency, inference timing, and resource results.
-6. Capture dashboard screenshots from a named completed run, with its database
-   and timestamps retained.
+The live campaign completed 13/13 runs and all T01-T16 functional checks passed.
+Its 4,248 scored test windows contain 4,176 primary-evaluable rows with TP=16,
+FP=43, TN=4,061, FN=56, Precision=0.2712, Recall=0.2222, F1=0.2443, and
+FPR=0.01048. The separate phase-intersection event criterion detected 7/9 events
+with 3.710-second median latency; two K4 events were missed. K3 and K4 both have
+zero window-level recall, so those event detections are not evidence of successful
+classification for fully contained anomaly windows.
 
-Until those gates pass, the repository may claim an implemented and tested ML
-pipeline, but not a trained campaign model, favorable detection quality,
-real-time behavior, or generalization.
+Accepted normal, train, and validation runs use commit `25e22c8`; accepted K2-K4
+runs use `6fa9970`, whose only intervening source change handles scenario-phase
+watermark lag. The generated `results/` tree is local and Git-ignored. The only
+remaining Chapter IV evidence-delivery gap is to capture dashboard screenshots
+from a named completed run with its database and timestamps retained.
 
 ## 5. Remaining design limits
 
@@ -119,6 +116,7 @@ real-time behavior, or generalization.
 
 The repository now implements the MQTT-to-SQLite path, exact scheduled feature
 contract, Isolation Forest lifecycle, online decision persistence, dashboard,
-campaign orchestration, and reproducible evaluation. The remaining boundary is
-empirical: run the frozen plan and report only the generated `results/`
-evidence.
+campaign orchestration, and reproducible evaluation. The frozen plan and
+functional matrix have been executed; measured limitations, including low
+window-level anomaly recall, remain part of the result. Dashboard screenshots
+are the only outstanding Chapter IV evidence-delivery artifact.

@@ -26,11 +26,14 @@ Implementation status is explicit:
 |---|---|---|
 | Phase 2 collection | Implemented with physical database schema v3 | Raw SQLite tables and raw CSV exports |
 | Phase 3 features and ML | Implemented; generated per run | Feature windows, inference calls, all predictions, alerts, and a checksum-protected artifact |
-| Phase 5 experiments | Executable; live campaign evidence pending | Frozen plan/splits, manifests, resource/timing samples, metrics, and figures |
+| Phase 5 experiments | Completed and evaluated | Frozen plan/splits, 13 completed run manifests, resource/timing samples, metrics, event results, and figures |
 
 The source implements the Phase 3 contracts below. A table or artifact exists as
 experimental evidence only after a corresponding live run creates it under
-`results/`; source completion does not pre-generate model performance.
+`results/`; source completion does not pre-generate model performance. The
+current local campaign generated 6,300 scheduled windows, including 4,248 scored
+held-out windows. This `results/` tree is experimental output and remains
+Git-ignored.
 
 ## 2. Sources and expected scale
 

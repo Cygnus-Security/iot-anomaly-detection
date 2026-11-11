@@ -164,21 +164,54 @@ def _feature_distributions(
     valid = [row for row in rows if row["feature_status"] == "ok"]
     if not valid:
         return None
-    codes = ("K1", "K2", "K3", "K4")
+    group_definitions = (
+        (
+            "K1 normal",
+            lambda row: row["scenario_code"] == "K1"
+            and row["ground_truth_label"] == "normal",
+        ),
+        (
+            "K2 anomaly",
+            lambda row: row["scenario_code"] == "K2"
+            and bool(row["is_target_device"])
+            and row["ground_truth_label"] == "anomaly",
+        ),
+        (
+            "K3 anomaly",
+            lambda row: row["scenario_code"] == "K3"
+            and bool(row["is_target_device"])
+            and row["ground_truth_label"] == "anomaly",
+        ),
+        (
+            "K4 anomaly",
+            lambda row: row["scenario_code"] == "K4"
+            and bool(row["is_target_device"])
+            and row["ground_truth_label"] == "anomaly",
+        ),
+    )
+    groups = [
+        (label, [row for row in valid if selector(row)])
+        for label, selector in group_definitions
+    ]
+    groups = [(label, group_rows) for label, group_rows in groups if group_rows]
+    if not groups:
+        return None
+    labels = [f"{label}\n(n={len(group_rows)})" for label, group_rows in groups]
     plt = _pyplot()
     figure, axes = plt.subplots(2, 4, figsize=(15, 7.2))
     for axis, feature in zip(axes.flat, FEATURE_NAMES, strict=False):
         samples = [
-            [float(row[feature]) for row in valid if row["scenario_code"] == code]
-            for code in codes
+            [float(row[feature]) for row in group_rows]
+            for _, group_rows in groups
         ]
-        axis.boxplot(samples, tick_labels=codes, showfliers=False)
+        axis.boxplot(samples, tick_labels=labels, showfliers=True)
         axis.set_title(feature.replace("_", " "))
         axis.grid(axis="y", alpha=0.2)
+        axis.tick_params(axis="x", labelsize=7)
     for axis in list(axes.flat)[len(FEATURE_NAMES) :]:
         axis.axis("off")
     figure.suptitle(
-        "Observed feature distributions by scenario (ground-truth scenario groups)"
+        "Observed features: K1 normal windows vs target-device anomaly windows"
     )
     name = _save(figure, directory / "feature_distributions_k1_k4.png")
     plt.close(figure)

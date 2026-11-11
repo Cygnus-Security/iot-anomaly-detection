@@ -1,6 +1,6 @@
 # Chapter IV Experiment Runbook
 
-**Status:** executable workflow; measured results are generated only by live runs
+**Status:** executed workflow; 13/13 runs completed and evaluation generated
 
 **Updated:** 2026-11-11
 
@@ -46,6 +46,22 @@ The plan contains 2,820 seconds of measured run time:
 
 No test run may begin until the model and threshold are frozen from train and
 validation data. Test observations must never trigger refitting.
+
+### 2.1. Current measured snapshot
+
+The completed local campaign contains 6,300 scheduled windows. All 4,248 test
+windows were scored and 4,176 fully labelled windows entered the primary matrix:
+TP=16, FP=43, TN=4,061, FN=56, Precision=0.2712, Recall=0.2222, F1=0.2443, and
+FPR=0.01048. The separate phase-intersection event rule detected 7/9 events with
+3.710-second median latency and missed two K4 events. K3 and K4 window-level
+recall is zero; event-level and fully-contained-window results must remain
+distinct. Replay of `test-k2-01` produced zero mismatches, and T01-T16 all
+passed.
+
+Accepted normal, training, and validation runs use commit `25e22c8`; accepted
+K2-K4 runs use `6fa9970` after the scenario-phase watermark-lag fix. Generated
+evidence remains local under the Git-ignored `results/` directory. Retained
+dashboard screenshots are the only current Chapter IV evidence-delivery gap.
 
 ## 3. Preflight
 

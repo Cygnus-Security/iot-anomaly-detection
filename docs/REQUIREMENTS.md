@@ -85,7 +85,7 @@ must publish the same topics, QoS, retained-status policy, and JSON schema.
 | Monitoring and AI dashboard | Implemented | `src/dashboard/` reads raw and derived records in English and displays all decisions, score/threshold, and alerts only when persisted |
 | Window features | Implemented | `src/features/windows.py` produces the exact scheduled half-open windows, quality states, and seven features |
 | Isolation Forest training and inference | Implemented | `src/ml/`, `src/analytics/`, and `src/pipeline/training.py` implement fit, calibration, artifact validation, scoring, timing, and persistence |
-| ML evaluation and measured metrics | Pipeline implemented; campaign pending | Frozen plan, runner, complete-grid evaluator, event metrics, and figures exist; no experiment result is pre-generated |
+| ML evaluation and measured metrics | Implemented and live-measured | The completed 13-run campaign generated complete-grid metrics, event results, timing data, and figures under local `results/` |
 
 ### 3.1. Verified Phase 2 evidence
 
@@ -134,12 +134,12 @@ dashboard broker write privileges.
 | FR-04 | Store collector receipt time, original topic, payload byte length, Device ID, session ID, sequence number, QoS, retain/duplicate metadata, sender time, and bounded raw JSON. Invalid input must not enter feature generation. | Implemented | Schema-v3 storage plus the canonical-input predicate exclude invalid, duplicate, retained, non-telemetry, and sessionless rows |
 | FR-05 | Build one feature vector per device window with a single versioned implementation reused by training and inference. | Implemented | `src/features/windows.py`; boundary, population-standard-deviation, UTF-8 byte, quality, and label tests |
 | FR-06 | Export raw observations, experiment ground truth, feature windows, split manifests, scores, and metrics with run IDs and versioned schemas. | Implemented; products generated on demand | `src/pipeline/exporting.py`, `src/pipeline/evaluation.py`, and `results/` contracts |
-| FR-07 | Run K1-K4 with explicit duration and seed. Publish ground truth on `experiments/v1/devices/{device_id}/events`; never place scenario labels in telemetry or model inputs. | Implemented; main campaign pending | Recursive leakage tests plus separate protocol events and seven-feature allow-list |
+| FR-07 | Run K1-K4 with explicit duration and seed. Publish ground truth on `experiments/v1/devices/{device_id}/events`; never place scenario labels in telemetry or model inputs. | Implemented and live-verified | K1 plus all nine K2-K4 held-out runs completed with separate protocol events, observed phases, and a seven-feature allow-list |
 | FR-08 | Fit Isolation Forest on independent normal runs and save the exact feature order, threshold, window configuration, random seed, run IDs, checksums, and library versions. | Implemented; artifact generated after collection | `src/pipeline/training.py` and `src/ml/model.py` |
 | FR-09 | Load a trusted compatible artifact and score every eligible new window. Reject missing/checksum/schema-invalid configured artifacts; continue feature collection when no model is configured. | Implemented | `src/ml.load_artifact` and `src.analytics.service` |
 | FR-10 | Persist every valid prediction and a traceable alert subset with Device ID, window ID, detection time, score, threshold, model version, and run/session identity. | Implemented | `window_predictions`, `inference_calls`, and `anomaly_alerts`; campaign evaluation intentionally applies no alert cooldown |
 | FR-11 | Provide a Streamlit interface for fleet state, throughput, traffic charts, run history, model readiness, scores, and alert history. Every number must trace to stored data or real model output. | Implemented | Read-only raw and Phase 3 query/UI tests; missing and zero-alert states remain explicit |
-| FR-12 | Produce confusion matrix, Precision, Recall, F1, FPR, detection latency, scored-window count, insufficient-data count, and missed-run count from held-out runs. | Pipeline implemented; measured output pending | Complete-grid evaluator and automatic figures exist; values require completed test runs |
+| FR-12 | Produce confusion matrix, Precision, Recall, F1, FPR, detection latency, scored-window count, insufficient-data count, and missed-run count from held-out runs. | Implemented and live-measured | 4,248 test windows were scored; 4,176 entered the primary matrix, and event evaluation retained all nine planned events including two missed K4 events |
 | FR-13 | Provide deterministic seeds, external configuration, versioned schemas, structured logs, documented commands, test fixtures, and split manifests sufficient for reproduction. | Implemented | Frozen plan/split, manifests, artifact metadata, runner, runbook, and automated evidence mapping |
 | FR-14 | Compose starts the configured MQTT/dashboard runtime and exposes analytics as an explicit experiment-profile service; training/evaluation run on demand. | Implemented | `docker-compose.yml`, campaign runner, and host CLIs |
 
@@ -194,10 +194,10 @@ results; model effectiveness must be concluded from evidence.
 |---|---|
 | Organized source, README, environment template, and Docker Compose runtime | Implemented |
 | Requirements, architecture, MQTT, data, dashboard, security, and campaign runbook | Implemented with source/evidence boundaries |
-| Reproducible raw, processed, ground-truth, split, and score datasets | Export pipeline implemented; datasets generated only by live campaign runs |
-| Versioned Isolation Forest artifact and training/evaluation commands | Implemented; artifact generated after train/validation collection |
+| Reproducible raw, processed, ground-truth, split, and score datasets | Generated by the completed local live campaign |
+| Versioned Isolation Forest artifact and training/evaluation commands | Implemented and generated from 1,368 training plus 684 validation windows |
 | Streamlit monitoring, scenario demonstration, and real alert history | Implemented and data-gated |
-| Evidence tables and plots for the research report | Generator implemented; no metrics are predeclared |
+| Evidence tables and plots for the research report | Generated from measured results; dashboard screenshots remain to be retained |
 
 ## 9. Acceptance gates
 
@@ -219,12 +219,16 @@ Training and inference call the same feature code; window and duplicate tests
 exist; artifact checksum/compatibility is enforced; no-model state creates no
 fake output; and analytics persists every score plus the alert subset.
 
-### Experiment and reporting — pending live campaign evidence
+### Experiment and reporting — passed with measured limitations
 
-The implemented workflow is capable of producing the split manifests, metrics,
-tables, and plots. The gate passes only when the frozen live runs finish and the
-generated outputs satisfy coverage, scenario-validity, and leakage checks
-without manual result editing.
+The frozen campaign completed 13/13 runs and 6,300 scheduled windows. All 4,248
+held-out windows were scored; 4,176 fully labelled rows produced TP=16, FP=43,
+TN=4,061, FN=56, Precision=0.2712, Recall=0.2222, F1=0.2443, and FPR=0.01048.
+The distinct event criterion detected 7/9 phases with 3.710-second median
+latency. It does not override the zero window-level recall observed for K3 and
+K4. Replay produced zero mismatches and functional checks T01-T16 passed. The
+generated `results/` tree is local and Git-ignored; retained dashboard
+screenshots are the only current Chapter IV evidence-delivery gap.
 
 ## 10. Research-report traceability
 

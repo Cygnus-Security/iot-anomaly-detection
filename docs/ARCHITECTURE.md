@@ -4,7 +4,7 @@
 
 **Updated:** 2026-11-11
 
-**Status:** Implemented MVP architecture; held-out campaign evidence pending
+**Status:** Implemented MVP architecture; held-out campaign completed and evaluated
 
 ## 1. Architectural principles
 
@@ -32,8 +32,8 @@
 ## 2. System context and status
 
 Solid paths below are implemented. The dashed ESP32 path remains a replacement
-contract rather than a hardware result. Implemented ML source must still not be
-described as measured model performance until the held-out campaign completes.
+contract rather than a hardware result. Model-performance claims below come only
+from the completed held-out campaign, not from source completion.
 
 ```mermaid
 flowchart TD
@@ -82,9 +82,9 @@ flowchart TD
 | SQLite and exports | Store raw evidence plus run-isolated derived tables and reproducible CSV products | Implemented | Raw schema v3 stays unchanged; `src/analytics/storage.py` owns feature, inference-call, prediction, and alert tables; `src/pipeline/exporting.py` owns result exports |
 | Streamlit dashboard | Read-only device, traffic, run, prediction, score/threshold, and alert views | Implemented | `src/dashboard/` queries real schema-v3 and derived records and keeps missing-model states explicit |
 | Feature processor | Build scheduled 20-second per-device windows every 5 seconds | Implemented | `src/features/windows.py` provides the shared half-open window and seven-feature implementation |
-| Trainer and evaluator | Split runs, train/calibrate Isolation Forest, persist artifacts and metrics | Implemented; campaign pending | `src/ml/` and `src/pipeline/` implement fit, threshold calibration, compatibility, export, metrics, events, and figures |
+| Trainer and evaluator | Split runs, train/calibrate Isolation Forest, persist artifacts and metrics | Implemented and live-measured | The completed campaign generated a frozen artifact, complete-grid exports, metrics, event results, and figures |
 | Online analytics | Load a compatible artifact, score every eligible window, and persist predictions/alerts | Implemented | `src/analytics/` is an experiment-profile Compose service; every scored decision is persisted before the alert subset |
-| Campaign runner | Execute isolated train, validation, and test runs in frozen order | Implemented; live campaign pending | `src/experiments/runner.py`, `experiments/run_plan.csv`, and `experiments/split_manifest.json` |
+| Campaign runner | Execute isolated train, validation, and test runs in frozen order | Implemented and live-verified | The frozen campaign completed 13/13 runs with an `ok` integrity gate for every accepted database |
 
 ### 2.2. Evidence boundary
 
@@ -452,13 +452,19 @@ The implementation gate requires and now has:
    reproduction.
 5. The dashboard reads only persisted real scores and alerts.
 
-### 11.3. Held-out campaign gate — pending measured evidence
+### 11.3. Held-out campaign gate — passed with measured limitations
 
-The Chapter IV gate passes only after all planned runs complete in the frozen
-order, the artifact is created before test collection, scenario behavior is
-verified from observations, exports retain missing rows and coverage reasons,
-and metrics/figures are regenerated from `results/`. Source completion alone
-does not pass this gate.
+All 13 planned runs completed, the artifact was frozen before test collection,
+all 4,248 held-out windows were scored, and the complete-grid evaluator retained
+4,176 primary-evaluable windows. Window classification produced TP=16, FP=43,
+TN=4,061, FN=56, Precision=0.2712, Recall=0.2222, F1=0.2443, and FPR=0.01048.
+The separate phase-intersection event rule detected 7/9 events with 3.710-second
+median latency; two K4 events were missed. K3 and K4 window-level recall remained
+zero, so event-level detection must not be presented as successful classification
+of fully contained anomaly windows. Replay of `test-k2-01` reproduced 396 feature
+rows and predictions with zero mismatches, and T01-T16 all passed. The local
+`results/` evidence is Git-ignored; dashboard screenshots remain the only current
+Chapter IV evidence-delivery gap.
 
 ## 12. References
 
