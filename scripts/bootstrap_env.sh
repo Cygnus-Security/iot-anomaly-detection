@@ -19,17 +19,19 @@ operator_password="$(openssl rand -hex 24)"
   printf '%s\n' 'MQTT_HOST=mosquitto'
   printf '%s\n' 'MQTT_PORT=1883'
   printf '%s\n' 'MQTT_HOST_PORT=1883'
-  printf '%s\n' 'MQTT_KEEPALIVE=60'
+  printf '%s\n' 'DASHBOARD_PORT=8501'
+  printf '%s\n' 'MQTT_KEEPALIVE=30'
   printf 'DEVICE_PASSWORD=%s\n' "$device_password"
   printf 'COLLECTOR_PASSWORD=%s\n' "$collector_password"
   printf 'OPERATOR_PASSWORD=%s\n' "$operator_password"
   printf '%s\n' 'DEVICE_COUNT=12'
-  printf '%s\n' 'DEVICE_BASE_INTERVAL_SECONDS=2.0'
+  printf '%s\n' 'DEVICE_BASE_INTERVAL_SECONDS=5.0'
   printf '%s\n' 'DEVICE_INTERVAL_JITTER_SECONDS=0.2'
   printf '%s\n' 'DEVICE_HEARTBEAT_SECONDS=30.0'
   printf '%s\n' 'SIMULATION_SEED=20261108'
   printf '%s\n' 'SQLITE_PATH=/app/data/runtime/iot_anomaly.db'
   printf '%s\n' 'COLLECTOR_QUEUE_SIZE=10000'
+  printf '%s\n' 'COLLECTOR_MAX_PAYLOAD_BYTES=4096'
   printf '%s\n' 'LOG_LEVEL=INFO'
 } > .env
 

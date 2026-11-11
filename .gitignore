@@ -27,4 +27,6 @@ mosquitto_logs/
 *.db-wal
 *.joblib
 *.csv
+!experiments/run_plan.csv
+/results/
 .DS_Store

@@ -22,7 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Start a finite communication scenario on one virtual device."
     )
-    parser.add_argument("--device-id", required=True, help="e.g. device-001")
+    parser.add_argument("--device-id", required=True, help="e.g. iot-001")
     parser.add_argument("--scenario", required=True, choices=sorted(SCENARIOS))
     parser.add_argument("--duration-seconds", type=float, default=30.0)
     parser.add_argument("--seed", type=int, default=42)
@@ -44,7 +44,7 @@ def run_command(args: argparse.Namespace, settings: MqttSettings) -> dict[str, A
     client = mqtt.Client(
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
         client_id=f"operator-{uuid.uuid4()}",
-        protocol=mqtt.MQTTv5,
+        protocol=mqtt.MQTTv311,
     )
     client.username_pw_set(settings.username, settings.password)
 
@@ -60,7 +60,9 @@ def run_command(args: argparse.Namespace, settings: MqttSettings) -> dict[str, A
             LOGGER.error("operator connection rejected: %s", reason_code)
             return
         connected.set()
-        connected_client.subscribe(f"iot/{args.device_id}/status", qos=1)
+        connected_client.subscribe(
+            f"experiments/v1/devices/{args.device_id}/events", qos=1
+        )
 
     def on_subscribe(
         subscribed_client: mqtt.Client,
@@ -99,7 +101,7 @@ def run_command(args: argparse.Namespace, settings: MqttSettings) -> dict[str, A
         if not connected.wait(timeout=args.ack_timeout_seconds):
             raise TimeoutError("broker connection acknowledgement timed out")
         if not subscribed.wait(timeout=args.ack_timeout_seconds):
-            raise TimeoutError("status subscription acknowledgement timed out")
+            raise TimeoutError("experiment-event subscription timed out")
         command = {
             "schema_version": SCHEMA_VERSION,
             "command": "set_scenario",
@@ -109,7 +111,7 @@ def run_command(args: argparse.Namespace, settings: MqttSettings) -> dict[str, A
             "seed": args.seed,
         }
         info = client.publish(
-            f"iot/{args.device_id}/command",
+            f"iot/v1/devices/{args.device_id}/command",
             json.dumps(command, separators=(",", ":"), sort_keys=True),
             qos=1,
             retain=False,

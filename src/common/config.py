@@ -68,7 +68,7 @@ class MqttSettings:
         return cls(
             host=_text("MQTT_HOST", "mosquitto"),
             port=_integer("MQTT_PORT", 1883, 1, 65535),
-            keepalive=_integer("MQTT_KEEPALIVE", 60, 5, 3600),
+            keepalive=_integer("MQTT_KEEPALIVE", 30, 5, 3600),
             username=username or _text("MQTT_USERNAME"),
             password=_secret(password_variable),
         )
@@ -85,6 +85,7 @@ class SimulatorSettings:
     device_count: int
     base_interval_seconds: float
     interval_jitter_seconds: float
+    initial_spread_seconds: float
     heartbeat_seconds: float
     simulation_seed: int
 
@@ -93,14 +94,17 @@ class SimulatorSettings:
         return cls(
             mqtt_host=_text("MQTT_HOST", "mosquitto"),
             mqtt_port=_integer("MQTT_PORT", 1883, 1, 65535),
-            mqtt_keepalive=_integer("MQTT_KEEPALIVE", 60, 5, 3600),
+            mqtt_keepalive=_integer("MQTT_KEEPALIVE", 30, 5, 3600),
             device_password=_secret("DEVICE_PASSWORD"),
             device_count=_integer("DEVICE_COUNT", 12, 1, 999),
             base_interval_seconds=_number(
-                "DEVICE_BASE_INTERVAL_SECONDS", 2.0, 0.05, 3600.0
+                "DEVICE_BASE_INTERVAL_SECONDS", 5.0, 0.05, 3600.0
             ),
             interval_jitter_seconds=_number(
-                "DEVICE_INTERVAL_JITTER_SECONDS", 0.2, 0.0, 600.0
+                "DEVICE_INTERVAL_JITTER_SECONDS", 0.5, 0.0, 600.0
+            ),
+            initial_spread_seconds=_number(
+                "DEVICE_INITIAL_SPREAD_SECONDS", 5.0, 0.0, 600.0
             ),
             heartbeat_seconds=_number(
                 "DEVICE_HEARTBEAT_SECONDS", 30.0, 1.0, 3600.0
@@ -118,6 +122,7 @@ class CollectorSettings:
     mqtt: MqttSettings
     database_path: str
     queue_size: int
+    max_payload_bytes: int
 
     @classmethod
     def from_env(cls) -> "CollectorSettings":
@@ -127,4 +132,7 @@ class CollectorSettings:
                 "SQLITE_PATH", "/app/data/runtime/iot_anomaly.db"
             ),
             queue_size=_integer("COLLECTOR_QUEUE_SIZE", 10_000, 100, 1_000_000),
+            max_payload_bytes=_integer(
+                "COLLECTOR_MAX_PAYLOAD_BYTES", 4096, 512, 4096
+            ),
         )

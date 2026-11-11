@@ -14,6 +14,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not Path(args.database).is_file():
         return 1
+    if not Path(f"{args.database}.collector-ready").is_file():
+        return 1
     try:
         connection = sqlite3.connect(f"file:{args.database}?mode=ro", uri=True, timeout=1)
         row = connection.execute(
@@ -22,7 +24,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         connection.close()
     except sqlite3.Error:
         return 1
-    return 0 if row == (1,) else 1
+    return 0 if row == (3,) else 1
 
 
 if __name__ == "__main__":

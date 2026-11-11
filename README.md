@@ -1,112 +1,94 @@
 # IoT Anomaly Detection System
 
-Research prototype for **detecting abnormal communication behavior in an IoT
-network using Machine Learning**. The current system creates real, authenticated
-MQTT traffic from independently identified virtual devices, stores observations
-and experimental ground truth in SQLite, and visualizes them in a live dashboard.
+Research prototype for detecting abnormal IoT communication behavior with real,
+authenticated MQTT traffic and an Isolation Forest model. Twelve independently
+identified virtual devices publish through Mosquitto; a collector stores raw
+observations in SQLite; a shared window implementation builds communication
+features; and the analytics service persists every model decision and alert.
 
-## Current implementation status
+K2-K4 are controlled communication anomalies and experimental ground truth.
+They are not described as attacks, botnets, or proof of compromise.
 
-| Phase | Status | Delivered |
+## Implementation status
+
+| Phase | Source status | Evidence boundary |
 |---|---|---|
-| 1 - System design | Complete | Requirements, architecture, protocol, data, security, phase gates |
-| 2 - IoT simulation | Complete | Mosquitto, 12 default clients, collector, SQLite/CSV, K1-K4 controls, tests |
-| 3 - Machine learning | Not implemented | Planned 30-second features and Isolation Forest |
-| 4 - Dashboard | Implemented for collected data | Live Streamlit monitoring; AI alerts activate only after Phase 3 produces detections |
-| 5 - Experiments | Not run | No metrics are claimed or pre-generated |
+| 1 - Design | Implemented | Requirements, architecture, MQTT, data, security, and experiment contracts |
+| 2 - MQTT simulation and collection | Implemented and previously smoke-tested | Mosquitto, 12 clients, K1-K4 control, collector, SQLite, raw export, tests |
+| 3 - Features and machine learning | Implemented and unit-tested | Scheduled 20-second windows, seven features, Isolation Forest training/calibration, trusted artifact loading, online scoring |
+| 4 - Dashboard | Implemented and unit-tested | Read-only telemetry, scenario, all-prediction, score/threshold, and alert views |
+| 5 - Chapter IV campaign | Runner and evaluation pipeline implemented | The frozen 13-run campaign must complete before any measured metric is claimed |
 
-The source does not label K2-K4 as attacks. They are controlled communication
-anomalies used to generate ground truth for later ML evaluation.
+Source availability is not an experimental result. Generated model files,
+predictions, metrics, figures, and screenshots are valid evidence only after the
+corresponding live run completes under `results/`.
 
-## Architecture
+## Runtime data flow
 
 ```text
-Virtual devices --telemetry/status--> Mosquitto --accepted iot/#--> Collector
-       ^                                  |                              |
-       |                                  +--> broker-only logs          v
-       +--------- per-device command <--- Operator CLI                SQLite
-                                                                         |
-                                                                         v
-                                                                        CSV
+Virtual devices --> Mosquitto --> Collector --> per-run SQLite
+       ^                 |                         |
+       |                 +--> broker logs         +--> scheduled feature windows
+       +-- Operator CLI                               --> Isolation Forest decisions
+                                                        --> alerts
+                                                             |
+                                                             v
+                                                    read-only dashboard
+
+train runs --> offline trainer --> checksum-protected artifact --> test-run analytics
+                                                           |
+                                                           v
+                                                exporter and evaluator
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
-[docs/MQTT_PROTOCOL.md](docs/MQTT_PROTOCOL.md) for the exact contracts and
-subscriber observation boundary.
+See [System Architecture](docs/ARCHITECTURE.md),
+[MQTT Protocol](docs/MQTT_PROTOCOL.md), and
+[Data Design](docs/DATA_DESIGN.md) for the normative contracts.
 
 ## Prerequisites
 
 - Docker Engine with Docker Compose v2
-- OpenSSL (only for the credential bootstrap script)
+- Python 3.11 or later for host-side orchestration and evaluation
+- OpenSSL for the credential bootstrap script
 
-No Python installation is required for the Docker workflow.
-
-## Start the Phase 2 lab
+Create the local environment once:
 
 ```bash
 ./scripts/bootstrap_env.sh
+python3 -m venv .venv
+.venv/bin/pip install -e '.[dev]'
+```
+
+The bootstrap script refuses to overwrite an existing `.env`. Generated
+credentials, databases, models, and result data are Git-ignored.
+
+## Interactive lab
+
+Start the MQTT collection and dashboard path:
+
+```bash
 docker compose up --build -d mosquitto collector simulator dashboard
 docker compose ps
 ```
 
-The default fleet has 12 devices (`device-001` through `device-012`). Mosquitto
-is exposed only at `127.0.0.1:1883`; all services also use the private Compose
-network. Follow live activity with:
+The broker and dashboard are bound to localhost. Open
+<http://127.0.0.1:8501>. The default fleet is `iot-001` through `iot-012`.
+
+Trigger a finite scenario with an authenticated command:
 
 ```bash
-docker compose logs -f --tail=100 mosquitto collector simulator
+docker compose --profile tools run --rm scenario \
+  --device-id iot-002 \
+  --scenario message_burst \
+  --duration-seconds 30 \
+  --seed 42
 ```
 
-Open the dashboard at [http://127.0.0.1:8501](http://127.0.0.1:8501). It is
-bound to localhost and refreshes live data every five seconds by default.
+Allowed scenarios are `normal` (K1), `message_burst` (K2),
+`abnormal_interval` (K3), and `abnormal_payload` (K4). The controller exits only
+after the target device acknowledges the real `scenario_started` event.
 
-The interface provides:
-
-- fleet health, traffic rate, payload validation, and experiment counters;
-- MQTT telemetry frequency and ground-truth distribution charts;
-- per-device payload size, inter-arrival time, sensor history, and raw metadata;
-- K1-K4 run history with configured and actual duration;
-- an AI/Alerts tab that reads real `anomaly_detections` when Phase 3 creates it.
-
-Until Phase 3 is implemented, the AI tab explicitly reports that inference data
-does not exist and shows K2-K4 only as experimental ground truth. It never
-manufactures anomaly scores or alerts. See
-[docs/DASHBOARD.md](docs/DASHBOARD.md) for metric definitions.
-
-Inspect evidence collected from real MQTT messages:
-
-```bash
-docker compose exec collector python -m src.collector.summary \
-  --database /app/data/runtime/iot_anomaly.db
-```
-
-## Trigger repeatable scenarios
-
-The controller sends an authenticated MQTT command and exits only after the
-target device acknowledges `scenario_started` on its status topic.
-
-```bash
-# K1 - finite normal communication experiment
-docker compose --profile tools run --rm scenario \
-  --device-id device-001 --scenario normal --duration-seconds 30 --seed 42
-
-# K2 - message burst
-docker compose --profile tools run --rm scenario \
-  --device-id device-002 --scenario message_burst --duration-seconds 30 --seed 42
-
-# K3 - alternating abnormal publish interval
-docker compose --profile tools run --rm scenario \
-  --device-id device-003 --scenario abnormal_interval --duration-seconds 30 --seed 42
-
-# K4 - abnormal payload size
-docker compose --profile tools run --rm scenario \
-  --device-id device-004 --scenario abnormal_payload --duration-seconds 30 --seed 42
-```
-
-Starting another scenario on the same device ends the current run with reason
-`replaced_by_command`. Normal behavior resumes automatically after duration.
-
-## Export raw data
+Export an interactive raw database:
 
 ```bash
 docker compose exec collector python -m src.collector.export_csv \
@@ -114,65 +96,133 @@ docker compose exec collector python -m src.collector.export_csv \
   --output-dir /app/data/exports
 ```
 
-The command writes `mqtt_observations.csv`, `devices.csv`, and
-`scenario_events.csv` under `data/exports/`. SQLite in `data/runtime/` remains
-the source of truth. Runtime artifacts are Git-ignored.
+## Chapter IV campaign
+
+The frozen plan is `experiments/run_plan.csv`; the run-level split is
+`experiments/split_manifest.json`. It contains two normal training runs, one
+normal validation run, one normal test run, and three independent runs for each
+of K2-K4. The required order is:
+
+```text
+train --> validation --> freeze model and threshold --> held-out test
+```
+
+Inspect the exact plan without changing state:
+
+```bash
+.venv/bin/python scripts/run_campaign.py --dry-run
+```
+
+Before collection, initialize the non-overwriting result tree and run the
+functional evidence matrix outside the ML split:
+
+```bash
+.venv/bin/python -m src.experiments.prepare --results-dir results
+docker compose up --build -d mosquitto
+set -a
+source .env
+set +a
+export MQTT_HOST=127.0.0.1 MQTT_PORT="${MQTT_HOST_PORT:-1883}"
+.venv/bin/python scripts/run_functional_tests.py \
+  --results-dir results \
+  --include-integration \
+  --live-evidence results/evidence/live-functional.json
+```
+
+Missing live evidence is recorded as `not_run`; it is never converted to a pass
+because matching source code exists.
+
+Run the campaign. The trainer hook runs before the first test if the trusted
+artifact does not yet exist:
+
+```bash
+.venv/bin/python scripts/run_campaign.py \
+  --build \
+  --trainer-command ".venv/bin/python scripts/train_model.py --results-dir results"
+```
+
+The runner creates a clean database per run, records actual UTC boundaries,
+samples Docker resource use, and refuses to overwrite completed evidence. To
+archive and retry a failed or interrupted attempt, repeat the command with
+`--retry-failed`.
+
+After all runs complete, export every run and generate evaluation tables and
+figures:
+
+```bash
+.venv/bin/python scripts/export_run.py --results-dir results
+.venv/bin/python scripts/evaluate_results.py --results-dir results
+```
+
+See [Chapter IV Runbook](docs/CHAPTER4_RUNBOOK.md) for live-evidence format,
+result files, recovery rules, and validity gates.
+
+## Model and inference contract
+
+- Each sample is one device window anchored to the real run start.
+- Windows are 20 seconds long, advance every 5 seconds, and use `[start,end)`.
+- Fewer than three canonical telemetry messages produce
+  `insufficient_data`, not a synthetic normal prediction.
+- The exact feature order is message count, rate, payload mean/std,
+  inter-arrival mean/std, and one-second peak count.
+- Training uses only the two normal training runs. The frozen threshold is the
+  first percentile of normal validation `decision_function` scores.
+- A window is anomalous only when `score < threshold`; equality is normal.
+- The model checksum, feature schema, window settings, run IDs, seed, threshold,
+  and dependency versions are verified when the artifact is loaded.
+- Joblib files are loaded only through the explicit trusted-artifact path.
+- All valid normal and anomalous decisions are stored in
+  `window_predictions`; `anomaly_alerts` is a traceable subset.
+- Ground-truth phase labels are evaluation metadata and never model inputs.
+
+## Dashboard
+
+The interface provides fleet health, traffic, device details, K1-K4 history,
+and an **AI & Alerts** tab. When a test database contains predictions, that tab
+shows every score, the frozen threshold, predicted label, model version, and
+the alert subset. A database with analytics tables but no model decisions is
+reported as such; the interface never substitutes scenario labels for ML
+output.
 
 ## Tests
 
-Run deterministic unit tests in the application image:
-
 ```bash
+# Host suite
+.venv/bin/pytest
+
+# Deterministic tests in the application image
 docker compose --profile test run --rm --build tests pytest tests/unit
-```
 
-Run broker integration tests for authenticated publish/subscribe, invalid
-password rejection, and per-device ACL isolation:
-
-```bash
+# Authenticated broker integration tests
 docker compose --profile test run --rm --build tests pytest tests/integration
 ```
 
-Run all tests:
-
-```bash
-docker compose --profile test run --rm --build tests pytest
-```
-
-## Stop the lab
-
-```bash
-docker compose down
-```
-
-This preserves the named broker volumes and the bind-mounted SQLite dataset.
-Use `docker compose down -v` only when you intentionally want to remove broker
-runtime volumes; it does not delete `data/runtime/iot_anomaly.db`.
-
-## Configuration
-
-All settings are documented in `.env.example`. The bootstrap script refuses to
-overwrite an existing `.env`. Device identities are unique but share one lab
-password in Phase 2; production provisioning requires unique secrets and TLS.
-
 ## Repository map
 
-- `docs/` - Phase 1 design and phase gates
-- `docker/mosquitto/` - authenticated broker image and ACL generation
-- `src/simulator/` - virtual devices, K1-K4 behavior, operator CLI
-- `src/collector/` - MQTT service, SQLite store, summary and CSV export
-- `src/features/`, `src/ml/` - reserved packages for Phase 3
-- `src/dashboard/` - live Streamlit dashboard and read-only SQLite query layer
-- `tests/` - unit and real-broker integration tests
-- `data/`, `models/` - ignored runtime/generated artifacts
+- `docker/mosquitto/` - authenticated broker image and generated ACLs
+- `src/simulator/` - virtual devices and K1-K4 behavior
+- `src/collector/` - MQTT collection, validation, raw SQLite, and raw export
+- `src/features/` - shared scheduled windows and seven-feature schema
+- `src/ml/` - Isolation Forest contracts, artifacts, scoring, and metrics
+- `src/analytics/` - online feature/prediction/alert persistence
+- `src/experiments/` - frozen plan, evidence handling, and campaign runner
+- `src/pipeline/` - training, run export, evaluation, and figures
+- `src/dashboard/` - read-only Streamlit interface
+- `experiments/` - canonical run plan and split manifest
+- `results/` - generated campaign evidence; not committed by default
 
-## Known Phase 2 limitations
+## Limits
 
-- The collector observes broker-forwarded publications, not failed connections,
-  rejected publishes, or the broker session table. Those remain in broker logs.
-- TLS and unique per-device credentials are production work, not MVP features.
-- SQLite is appropriate for one-laptop research experiments, not horizontal
-  scale.
-- ML, real-time inference, model metrics, and AI alerts are intentionally not
-  claimed until Phase 3 and Phase 5 are implemented and measured. The dashboard
-  already exposes real Phase 2 observations and experiment ground truth.
+- The collector sees broker-forwarded publications, not rejected connections or
+  publishes; authentication and ACL denials remain broker-log evidence.
+- This is application-level device simulation over real MQTT, not ESP32 or
+  wireless-channel emulation.
+- TLS and unique production device credentials are deployment work outside the
+  isolated lab.
+- SQLite is suitable for this one-computer research campaign, not horizontal
+  production scale.
+- Overlapping windows are not independent experimental repetitions. Three runs
+  per anomaly scenario support a preliminary lab assessment, not broad
+  generalization.
+- No favorable accuracy, F1, latency, or real-time claim is valid until it is
+  computed from completed held-out runs under `results/`.

@@ -20,12 +20,18 @@ Gate: the acceptance gate in `REQUIREMENTS.md` passes using real MQTT traffic.
 
 Inputs: independent normal training sessions and mixed labelled test sessions.
 
-Outputs: deterministic 30-second feature extraction, leakage-safe session
+Outputs: deterministic 20-second windows with a 5-second stride, leakage-safe run
 split, fitted preprocessing, trained Isolation Forest artifact, real-time
 inference, and measured precision/recall/F1/FPR/latency.
 
 Gate: training and inference consume the same versioned feature contract; no
 ground-truth field enters the model; reported metrics are generated artifacts.
+
+Current source state: the shared window/feature implementation, Isolation
+Forest fit/calibration and trusted artifact contract, analytics persistence,
+training/export/evaluation CLIs, and their deterministic tests are implemented.
+This completes the implementation gate; it does not predeclare held-out
+campaign metrics.
 
 ## Phase 4 - Dashboard and integration
 
@@ -34,10 +40,10 @@ suspect device detail, and anomaly history backed by SQLite.
 
 Gate: every displayed number can be traced to stored data or model output.
 
-Current state: device/activity views, traffic charts, scenario history, and the
-read-only dashboard runtime are implemented. Alert and anomaly-history widgets
-remain data-gated: they activate only after Phase 3 creates real
-`anomaly_detections` records.
+Current state: device/activity views, traffic charts, scenario history, all
+model decisions, score/threshold charts, and alert history are implemented.
+The latter remain data-gated: they display only records actually persisted by
+analytics and never derive a detection from the scenario label.
 
 ## Phase 5 - Experiment and evaluation
 
@@ -45,6 +51,11 @@ Outputs: repeated independent K1-K4 sessions, raw/processed datasets, result
 tables and plots, limitations, and reproducible experiment instructions.
 
 Gate: a clean machine can reproduce the experiment and metrics from source.
+
+Current source state: the frozen 13-run plan, resumable Compose runner,
+functional evidence matrix, exporter, evaluator, and automatic figures are
+implemented. Phase 5 remains incomplete until the live campaign finishes and
+its generated `results/` artifacts pass the validity gates.
 
 ## Parallel work boundaries
 
@@ -56,5 +67,7 @@ without editing the same files:
 - Collection/storage: `src/collector`, database unit tests.
 - Documentation/operations: `README.md`, scripts, runbooks.
 
-Phase 3 feature extraction must wait for the raw schema to stabilize. Dashboard
-queries can be developed alongside ML only after Phase 3 adds anomaly tables.
+Physical raw schema v3 remains the immutable observation boundary. Derived
+feature, prediction, inference-call, and alert tables extend each run-isolated
+database without changing that raw schema version. Dashboard anomaly views stay
+data-gated until analytics creates real prediction records.

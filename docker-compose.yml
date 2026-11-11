@@ -8,7 +8,7 @@ x-app: &app
   environment: &common-environment
     MQTT_HOST: ${MQTT_HOST:-mosquitto}
     MQTT_PORT: ${MQTT_PORT:-1883}
-    MQTT_KEEPALIVE: ${MQTT_KEEPALIVE:-60}
+    MQTT_KEEPALIVE: ${MQTT_KEEPALIVE:-30}
     LOG_LEVEL: ${LOG_LEVEL:-INFO}
   networks:
     - iot_lab
@@ -48,14 +48,16 @@ services:
       MQTT_PASSWORD: ${COLLECTOR_PASSWORD:?Set COLLECTOR_PASSWORD in .env}
       SQLITE_PATH: ${SQLITE_PATH:-/app/data/runtime/iot_anomaly.db}
       COLLECTOR_QUEUE_SIZE: ${COLLECTOR_QUEUE_SIZE:-10000}
+      COLLECTOR_MAX_PAYLOAD_BYTES: ${COLLECTOR_MAX_PAYLOAD_BYTES:-4096}
     volumes:
       - ./data/runtime:/app/data/runtime
       - ./data/exports:/app/data/exports
+      - ./results:/app/results
     depends_on:
       mosquitto:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-m", "src.collector.healthcheck", "--database", "/app/data/runtime/iot_anomaly.db"]
+      test: ["CMD-SHELL", "python -m src.collector.healthcheck --database \"$$SQLITE_PATH\""]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -68,8 +70,9 @@ services:
       <<: *common-environment
       DEVICE_PASSWORD: ${DEVICE_PASSWORD:?Set DEVICE_PASSWORD in .env}
       DEVICE_COUNT: ${DEVICE_COUNT:-12}
-      DEVICE_BASE_INTERVAL_SECONDS: ${DEVICE_BASE_INTERVAL_SECONDS:-2.0}
-      DEVICE_INTERVAL_JITTER_SECONDS: ${DEVICE_INTERVAL_JITTER_SECONDS:-0.2}
+      DEVICE_BASE_INTERVAL_SECONDS: ${DEVICE_BASE_INTERVAL_SECONDS:-5.0}
+      DEVICE_INTERVAL_JITTER_SECONDS: ${DEVICE_INTERVAL_JITTER_SECONDS:-0.5}
+      DEVICE_INITIAL_SPREAD_SECONDS: ${DEVICE_INITIAL_SPREAD_SECONDS:-5.0}
       DEVICE_HEARTBEAT_SECONDS: ${DEVICE_HEARTBEAT_SECONDS:-30.0}
       SIMULATION_SEED: ${SIMULATION_SEED:-20261108}
     depends_on:
@@ -77,6 +80,37 @@ services:
         condition: service_healthy
       collector:
         condition: service_healthy
+
+  analytics:
+    <<: *app
+    profiles: ["experiment"]
+    restart: "no"
+    command: ["python", "-m", "src.analytics.service"]
+    environment:
+      <<: *common-environment
+      SQLITE_PATH: ${SQLITE_PATH:-/app/data/runtime/iot_anomaly.db}
+      EXPERIMENT_RUN_ID: ${EXPERIMENT_RUN_ID:-interactive}
+      COLLECTION_SESSION_ID: ${COLLECTION_SESSION_ID:-interactive-session}
+      RUN_START_UNIX: ${RUN_START_UNIX:-0}
+      RUN_END_UNIX: ${RUN_END_UNIX:-1}
+      RUN_SCENARIO: ${RUN_SCENARIO:-normal}
+      DEVICE_COUNT: ${DEVICE_COUNT:-12}
+      MODEL_DIRECTORY: ${MODEL_DIRECTORY:-}
+      ANALYTICS_READY_FILE: ${ANALYTICS_READY_FILE:-/app/results/analytics.ready.json}
+      ANALYTICS_POLL_SECONDS: ${ANALYTICS_POLL_SECONDS:-0.5}
+      ANALYTICS_SETTLE_SECONDS: ${ANALYTICS_SETTLE_SECONDS:-1.0}
+    volumes:
+      - ./data/runtime:/app/data/runtime
+      - ./results:/app/results
+    depends_on:
+      collector:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "src.analytics.healthcheck"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 2s
 
   dashboard:
     <<: *app
@@ -94,6 +128,7 @@ services:
       - "127.0.0.1:${DASHBOARD_PORT:-8501}:8501"
     volumes:
       - ./data/runtime:/app/data/runtime:ro
+      - ./results:/app/results:ro
     depends_on:
       collector:
         condition: service_healthy

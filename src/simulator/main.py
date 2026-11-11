@@ -33,7 +33,7 @@ def main() -> int:
 
     threads: list[threading.Thread] = []
     for index in range(1, settings.device_count + 1):
-        device_id = f"device-{index:03d}"
+        device_id = f"iot-{index:03d}"
         device = VirtualDevice(
             device_id,
             settings,

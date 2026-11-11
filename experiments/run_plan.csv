@@ -1,0 +1,14 @@
+run_id,split,scenario,simulation_seed,duration_seconds,target_device,device_count,baseline_before_seconds,anomaly_seconds,baseline_after_seconds
+train-normal-01,train,normal,101,300,,12,300,0,0
+train-normal-02,train,normal,102,300,,12,300,0,0
+validation-normal-01,validation,normal,201,300,,12,300,0,0
+test-normal-01,test,normal,301,300,,12,300,0,0
+test-k2-01,test,message_burst,401,180,iot-001,12,60,60,60
+test-k2-02,test,message_burst,402,180,iot-002,12,60,60,60
+test-k2-03,test,message_burst,403,180,iot-003,12,60,60,60
+test-k3-01,test,abnormal_interval,501,180,iot-001,12,60,60,60
+test-k3-02,test,abnormal_interval,502,180,iot-002,12,60,60,60
+test-k3-03,test,abnormal_interval,503,180,iot-003,12,60,60,60
+test-k4-01,test,abnormal_payload,601,180,iot-001,12,60,60,60
+test-k4-02,test,abnormal_payload,602,180,iot-002,12,60,60,60
+test-k4-03,test,abnormal_payload,603,180,iot-003,12,60,60,60

@@ -7,8 +7,15 @@ from pathlib import Path
 import pytest
 from streamlit.testing.v1 import AppTest
 
+from src.analytics.storage import AnalyticsStore
 from src.collector.storage import ObservedMessage, ObservationStore
 from src.dashboard.data import DashboardRepository
+from src.features import FeatureVector, FeatureWindow, GroundTruth
+from src.ml import ScoreResult
+
+DEVICE_ID = "iot-001"
+SESSION_ID = "29ab4b25-c9ad-4f11-86b3-dabfb06a02cc"
+RUN_ID = "71fdc845-3be7-4711-a673-46894844274a"
 
 
 def observation(topic: str, payload: dict[str, object], at: float) -> ObservedMessage:
@@ -22,12 +29,12 @@ def observation(topic: str, payload: dict[str, object], at: float) -> ObservedMe
     )
 
 
-def common_payload(message_id: str, timestamp: str) -> dict[str, object]:
+def common_payload(timestamp: str) -> dict[str, object]:
     return {
         "schema_version": "1.0",
-        "message_id": message_id,
-        "device_id": "device-001",
-        "timestamp": timestamp,
+        "device_id": DEVICE_ID,
+        "session_id": SESSION_ID,
+        "sent_at_utc": timestamp,
     }
 
 
@@ -40,43 +47,67 @@ def test_dashboard_queries_live_observations_without_inventing_detections(
     timestamp = "2026-11-08T09:00:00Z"
     store = ObservationStore(str(database))
 
-    online = common_payload("online-1", timestamp)
-    online.update({"event": "online", "details": {}})
-    store.process(observation("iot/device-001/status", online, now - 2.0))
+    online = common_payload(timestamp)
+    online.update({"state": "online"})
+    store.process(
+        observation(f"iot/v1/devices/{DEVICE_ID}/status", online, now - 2.0)
+    )
 
     for sequence, received_at in ((1, now - 1.0), (2, now)):
-        telemetry = common_payload(f"telemetry-{sequence}", timestamp)
+        telemetry = common_payload(timestamp)
         telemetry.update(
             {
-                "sequence": sequence,
-                "sensor": {
+                "device_type": "environment_sensor",
+                "sequence_no": sequence,
+                "measurements": {
                     "temperature_c": 23.5 + sequence,
-                    "humidity_percent": 50.0,
+                    "relative_humidity_pct": 50.0,
                 },
-                "device": {"firmware": "test", "uptime_seconds": sequence},
             }
         )
         store.process(
-            observation("iot/device-001/telemetry", telemetry, received_at)
+            observation(
+                f"iot/v1/devices/{DEVICE_ID}/telemetry", telemetry, received_at
+            )
         )
+
+    # A QoS 1 application duplicate remains auditable but is excluded from
+    # dashboard counts, traffic rates, and device history.
+    store.process(
+        observation(
+            f"iot/v1/devices/{DEVICE_ID}/telemetry", telemetry, now + 0.01
+        )
+    )
 
     for event, received_at in (
         ("scenario_started", now - 0.8),
         ("scenario_ended", now - 0.2),
     ):
-        scenario = common_payload(f"event-{event}", timestamp)
-        scenario.update(
-            {
-                "event": event,
-                "scenario": "message_burst",
-                "scenario_run_id": "run-1",
-                "request_id": "request-1",
-                "seed": 42,
-                "duration_seconds": 1,
-                "details": {},
-            }
+        scenario = {
+            "schema_version": "1.0",
+            "event_id": (
+                "cb8df2e0-3488-4c44-91f8-239b8016675b"
+                if event == "scenario_started"
+                else "9f9f448a-aa2d-4272-ad3a-b47d43f67fd5"
+            ),
+            "device_id": DEVICE_ID,
+            "session_id": SESSION_ID,
+            "event_at_utc": timestamp,
+            "event": event,
+            "scenario": "message_burst",
+            "experiment_run_id": RUN_ID,
+            "request_id": "c410f117-93c7-40ca-9147-e57fa4088e83",
+            "seed": 42,
+            "duration_seconds": 1,
+            "details": {},
+        }
+        store.process(
+            observation(
+                f"experiments/v1/devices/{DEVICE_ID}/events",
+                scenario,
+                received_at,
+            )
         )
-        store.process(observation("iot/device-001/status", scenario, received_at))
     store.close()
 
     repository = DashboardRepository(str(database))
@@ -93,7 +124,7 @@ def test_dashboard_queries_live_observations_without_inventing_detections(
 
     traffic = repository.traffic_series(window_seconds=300, now_unix=now)
     assert traffic["messages"].sum() == 2
-    history = repository.device_telemetry("device-001")
+    history = repository.device_telemetry(DEVICE_ID)
     assert list(history["sequence"]) == [1, 2]
     assert list(history["temperature_c"]) == [24.5, 25.5]
 
@@ -109,11 +140,104 @@ def test_dashboard_queries_live_observations_without_inventing_detections(
     assert [item.value for item in app.title] == ["IoT Anomaly Detection System"]
     assert len(app.metric) == 6
     assert [item.label for item in app.tabs] == [
-        "Tổng quan",
-        "Thiết bị",
-        "Kịch bản thử nghiệm",
-        "AI & Cảnh báo",
+        "Overview",
+        "Devices",
+        "Experiment Scenarios",
+        "AI & Alerts",
     ]
-    app.selectbox[1].select("device-001").run(timeout=20)
+    app.selectbox[1].select(DEVICE_ID).run(timeout=20)
     assert not app.exception
     assert len(app.metric) == 10
+
+
+def test_dashboard_exposes_all_predictions_and_actual_alert_counts(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "phase3-dashboard.db"
+    store = ObservationStore(str(database))
+    store.close()
+    window = FeatureWindow(
+        run_id="test-k2-01",
+        collection_session_id="collection-01",
+        device_id=DEVICE_ID,
+        window_index=0,
+        window_start_unix=1_800_000_000.0,
+        window_end_unix=1_800_000_020.0,
+        observed_message_count=4,
+        feature_status="ok",
+        exclusion_reason=None,
+        features=FeatureVector(
+            message_count=4,
+            message_rate_hz=0.2,
+            payload_mean_bytes=370.0,
+            payload_std_bytes=1.0,
+            interarrival_mean_ms=5_000.0,
+            interarrival_std_ms=25.0,
+            peak_messages_per_second=1,
+        ),
+        ground_truth=GroundTruth("normal", None, False),
+    )
+    with AnalyticsStore(database) as analytics:
+        analytics.persist_feature_windows([window])
+        analytics.persist_predictions(
+            [window],
+            [
+                ScoreResult(
+                    score=-0.2,
+                    predicted_label="anomaly",
+                    threshold=-0.1,
+                    model_version="iforest-test-v1",
+                )
+            ],
+            inference_call_id="call-001",
+            predicted_at_unix=1_800_000_021.0,
+            inference_latency_ms=0.75,
+        )
+
+    repository = DashboardRepository(str(database))
+    assert repository.has_prediction_table()
+    assert repository.prediction_count() == 1
+    assert repository.alert_count() == 1
+    predictions = repository.predictions(device_id=DEVICE_ID)
+    assert predictions.loc[0, "predicted_label"] == "anomaly"
+    assert predictions.loc[0, "ground_truth_label"] == "normal"
+    assert predictions.loc[0, "anomaly_score"] == pytest.approx(-0.2)
+    assert repository.detections().loc[0, "window_id"] == window.window_id
+
+
+def test_dashboard_marks_stale_then_recovers_after_new_telemetry(tmp_path: Path) -> None:
+    database = tmp_path / "stale-recovery.db"
+    now = time.time()
+    timestamp = "2026-11-08T09:00:00Z"
+    store = ObservationStore(str(database))
+    online = common_payload(timestamp)
+    online.update({"state": "online"})
+    store.process(
+        observation(f"iot/v1/devices/{DEVICE_ID}/status", online, now - 60.0)
+    )
+
+    repository = DashboardRepository(str(database))
+    stale = repository.devices(
+        window_seconds=300, now_unix=now, stale_after_seconds=15.0
+    )
+    assert stale.loc[0, "observed_state"] == "stale"
+
+    telemetry = common_payload(timestamp)
+    telemetry.update(
+        {
+            "device_type": "environment_sensor",
+            "sequence_no": 1,
+            "measurements": {
+                "temperature_c": 24.0,
+                "relative_humidity_pct": 50.0,
+            },
+        }
+    )
+    store.process(
+        observation(f"iot/v1/devices/{DEVICE_ID}/telemetry", telemetry, now)
+    )
+    store.close()
+    recovered = repository.devices(
+        window_seconds=300, now_unix=now + 1.0, stale_after_seconds=15.0
+    )
+    assert recovered.loc[0, "observed_state"] == "online"

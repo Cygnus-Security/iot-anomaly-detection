@@ -12,33 +12,33 @@ def make_run(name: str, seed: int = 42) -> ScenarioRun:
         name=name,
         duration_seconds=30,
         seed=seed,
-        request_id="request-1",
+        request_id="c410f117-93c7-40ca-9147-e57fa4088e83",
     )
 
 
 def test_burst_is_faster_than_normal_baseline() -> None:
     run = make_run("message_burst")
-    assert 0.02 <= run.next_interval(2.0, 0.2) < 0.25
+    assert run.next_interval(5.0, 0.5) == 0.2
 
 
 def test_abnormal_interval_alternates_short_and_long() -> None:
     run = make_run("abnormal_interval")
-    assert run.next_interval(2.0, 0.2) == 0.1
-    assert run.next_interval(2.0, 0.2) == 8.0
+    assert run.next_interval(5.0, 0.5) == 1.0
+    assert run.next_interval(5.0, 0.5) == 9.0
 
 
 def test_abnormal_payload_is_large_and_reproducible() -> None:
-    first = make_run("abnormal_payload", seed=7).payload_extension()["padding"]
-    second = make_run("abnormal_payload", seed=7).payload_extension()["padding"]
-    assert len(first) == 2048
+    first = make_run("abnormal_payload", seed=7).payload_extension()["diagnostic_blob"]
+    second = make_run("abnormal_payload", seed=7).payload_extension()["diagnostic_blob"]
+    assert len(first) == 1024
     assert first == second
 
 
 def test_normal_jitter_is_seed_reproducible_and_bounded() -> None:
-    first = normal_interval(random.Random(5), 2.0, 0.2)
-    second = normal_interval(random.Random(5), 2.0, 0.2)
+    first = normal_interval(random.Random(5), 5.0, 0.5)
+    second = normal_interval(random.Random(5), 5.0, 0.5)
     assert first == second
-    assert 1.8 <= first <= 2.2
+    assert 4.5 <= first <= 5.5
 
 
 def test_scenario_expiry_uses_monotonic_deadline() -> None:
