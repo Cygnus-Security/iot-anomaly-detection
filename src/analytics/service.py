@@ -251,6 +251,14 @@ class AnalyticsService:
             run_end_unix=cutoff,
         )
         phase, phase_complete = self._scenario_phase()
+        if phase is not None and phase.end_unix > cutoff:
+            # The end event can reach SQLite slightly ahead of the safe
+            # observation watermark. Keep already due windows explicitly
+            # unknown until the cutoff catches up, then relabel them through
+            # the idempotent feature-window upsert. Ground truth is never an
+            # inference input.
+            phase = None
+            phase_complete = False
         windows = build_scheduled_windows(
             run_id=self.config.run_id,
             collection_session_id=self.config.collection_session_id,

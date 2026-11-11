@@ -322,6 +322,46 @@ def test_scenario_truth_uses_actual_start_and_end_events(tmp_path: Path) -> None
     ]
 
 
+def test_phase_end_ahead_of_safe_cutoff_waits_then_relabels(tmp_path: Path) -> None:
+    start = 1_800_000_000.0
+    path = tmp_path / "run.db"
+    seed_database(path, start)
+    store = ObservationStore(str(path))
+    try:
+        store.process(scenario_event("scenario_started", start + 5.0))
+        store.process(scenario_event("scenario_ended", start + 25.0))
+    finally:
+        store.close()
+    service = AnalyticsService(
+        AnalyticsConfig(
+            database_path=path,
+            run_id=RUN_ID,
+            collection_session_id=COLLECTION_SESSION_ID,
+            device_ids=("iot-001", "iot-002"),
+            run_start_unix=start,
+            run_end_unix=start + 40.0,
+            scenario="K2",
+        )
+    )
+    try:
+        before_watermark = service.process_until(start + 24.0)
+        after_watermark = service.process_until(start + 30.0)
+    finally:
+        service.close()
+
+    assert before_watermark.phase_log_complete is False
+    assert after_watermark.phase_log_complete is True
+    with sqlite3.connect(path) as connection:
+        labels = connection.execute(
+            """
+            SELECT DISTINCT ground_truth_label
+            FROM feature_windows
+            ORDER BY ground_truth_label
+            """
+        ).fetchall()
+    assert labels == [("anomaly",), ("normal",), ("transition",)]
+
+
 def test_incomplete_scenario_log_marks_truth_unknown(tmp_path: Path) -> None:
     start = 1_800_000_000.0
     path = tmp_path / "run.db"
