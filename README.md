@@ -17,7 +17,7 @@ They are not described as attacks, botnets, or proof of compromise.
 | 2 - MQTT simulation and collection | Implemented and previously smoke-tested | Mosquitto, 12 clients, K1-K4 control, collector, SQLite, raw export, tests |
 | 3 - Features and machine learning | Implemented and unit-tested | Scheduled 20-second windows, seven features, Isolation Forest training/calibration, trusted artifact loading, online scoring |
 | 4 - Dashboard | Implemented and unit-tested | Read-only telemetry, scenario, all-prediction, score/threshold, and alert views |
-| 5 - Chapter IV campaign | Runner and evaluation pipeline implemented | The frozen 13-run campaign must complete before any measured metric is claimed |
+| 5 - Chapter IV campaign | Completed and evaluated | 13/13 runs completed; measured metrics, event results, functional evidence, and report figures were generated |
 
 Source availability is not an experimental result. Generated model files,
 predictions, metrics, figures, and screenshots are valid evidence only after the
@@ -166,6 +166,9 @@ See [Chapter IV Runbook](docs/CHAPTER4_RUNBOOK.md) for live-evidence format,
 result files, recovery rules, and validity gates.
 
 ## Measured Chapter IV result
+
+The complete Vietnamese chapter is available in
+[Chapter IV Experimental Results](docs/CHAPTER4_RESULTS.md).
 
 The local, generated `results/` tree records 13/13 completed runs and 6,300
 scheduled windows. All 4,248 held-out windows were scored; 4,176 fully labelled
